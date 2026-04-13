@@ -90,9 +90,6 @@ void pipeline_t::execute(unsigned int lane_number) {
                      REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
                   }
                   //otherwise no need to write to PRF as the correct value was available
-                  //TODO: Check later
-                  REN->set_ready(PAY.buf[index].C_phys_reg);
-                  REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
                }
             }
             // FIX_ME #13 END
@@ -158,7 +155,6 @@ void pipeline_t::execute(unsigned int lane_number) {
                   REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
                }
                //else no need to write to PRF
-               REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
             }
             //when value is not predicted, write to the PRF
             else{
@@ -222,10 +218,10 @@ void pipeline_t::execute(unsigned int lane_number) {
          // FIX_ME #11b BEGIN
          if (PAY.buf[index].C_valid &&                   //has destination register
           !(IS_LOAD(PAY.buf[index].flags)) &&         //Is not a LOAD
-          !(IS_AMO(PAY.buf[index].flags))  //is not AMO 
-         ){         
-            if (!(PAY.buf[index].predicted))                 //is not predicted
-               IQ.wakeup(PAY.buf[index].C_phys_reg,true);
+          !(IS_AMO(PAY.buf[index].flags))  &&         //is not AMO 
+          !(PAY.buf[index].predicted)                 //is not predicted
+         ){           //Is not AMO
+            IQ.wakeup(PAY.buf[index].C_phys_reg,true);
             REN->set_ready(PAY.buf[index].C_phys_reg);
           }
          // FIX_ME #11b END
@@ -290,9 +286,6 @@ void pipeline_t::load_replay() {
                REN->write(PAY.buf[index].C_phys_reg, PAY.buf[index].C_value.dw);
             }
             //else correct prediction. no need to update PRF
-            //TODO: Check after removing
-            REN->set_ready(PAY.buf[index].C_phys_reg);
-            REN->write(PAY.buf[index].C_phys_reg, PAY.buf[index].C_value.dw);
          } 
          //if no prediction available then set ready bit and wakeup the port
          else {

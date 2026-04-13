@@ -116,6 +116,45 @@ void pipeline_t::retire(size_t &instret) {
          // Keep track of the number of retired instructions.
          // Split instructions should only count as one architectural instruction, therefore, only the second uop should increment the count.
          if (!PAY.buf[PAY.head].split || !PAY.buf[PAY.head].upper) {
+
+            //Value prediction count logic
+            //count only when the value prediction is enabled
+            if (VP_ENABLED) {
+               //get the index of the instruction from the head
+               unsigned int idx = PAY.head;
+               //check if the instruction was ineligible
+               if (!eligible(&PAY.buf[idx])) {
+                  //increment count for ineligible for value prediction 
+                  vpmeas_ineligible++;
+               } 
+               //eligible instructions
+               else {
+                  
+                  //if the prediction was not available
+                  if (!PAY.buf[idx].predicted) {
+                     vpmeas_miss++;
+                  } 
+                  //when the value from functional simulator is available
+                  else {
+                     //check if the predicted value is correct
+                     bool correct = (PAY.buf[idx].vp_prediction == PAY.buf[idx].C_value.dw);
+                     
+                     //confident and correct value
+                     if (PAY.buf[idx].vp_confident && correct)
+                        vpmeas_conf_corr++;
+                     //confident and incorrect value
+                     else if (PAY.buf[idx].vp_confident && !correct)
+                        vpmeas_conf_incorr++;
+                     //not confident and correct
+                     else if (!PAY.buf[idx].vp_confident && correct)
+                        vpmeas_unconf_corr++;
+                     //not confident and incorrect
+                     else
+                        vpmeas_unconf_incorr++;
+                  }
+               }
+            }
+
             num_insn++;
             instret++;
             inc_counter(commit_count);

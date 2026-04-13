@@ -207,7 +207,7 @@ void pipeline_t::dispatch() {
          //if value predicted with confidence then set the ready bit
          if (PAY.buf[index].predicted && PAY.buf[index].vp_confident){
             REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].vp_prediction);
-            REN->is_ready(PAY.buf[index].C_phys_reg);
+            REN->set_ready(PAY.buf[index].C_phys_reg);
          }
          //else clear 
          else {

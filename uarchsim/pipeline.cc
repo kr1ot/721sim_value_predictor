@@ -447,6 +447,18 @@ pipeline_t::pipeline_t(
    //  FetchUnit->set_stats(get_stats());
 
    ///////////////////////////////////////////////////
+   // Set up memory prediction counters
+   ///////////////////////////////////////////////////
+   //TODO: Move these in a file
+   // Initialize VP measurement counters
+   vpmeas_ineligible = 0;
+   vpmeas_miss = 0;
+   vpmeas_conf_corr = 0;
+   vpmeas_conf_incorr = 0;
+   vpmeas_unconf_corr = 0;
+   vpmeas_unconf_incorr = 0;
+
+   ///////////////////////////////////////////////////
    // Set up the memory system.
    ///////////////////////////////////////////////////
 
@@ -473,6 +485,35 @@ pipeline_t::~pipeline_t() {
 
    FetchUnit->output(stats->get_counter("commit_count"), stats->get_counter("cycle_count"), stats_log);
    LSU.dump_stats(extra_wait_time_for_inum, stats_log);
+
+   //VPU measurements
+   //TODO: Encapsulate in a different file
+   if (VP_ENABLED) {
+      uint64_t inelig = vpmeas_ineligible;
+      uint64_t miss = vpmeas_miss;
+      uint64_t conf_corr = vpmeas_conf_corr;
+      uint64_t conf_incorr = vpmeas_conf_incorr;
+      uint64_t unconf_corr = vpmeas_unconf_corr;
+      uint64_t uncof_incorr = vpmeas_unconf_incorr;
+      uint64_t elig = miss + conf_corr + conf_incorr + unconf_corr + uncof_incorr;
+      uint64_t total = inelig + elig;
+
+      fprintf(stats_log, "VPU MEASUREMENTS-----------------------------------\n");
+      fprintf(stats_log, "vpmeas_ineligible         : %10" PRIu64 " (%6.2f%%) // Not eligible for value prediction.\n",
+              inelig, total  ? 100.0*inelig/total : 0.0);
+      fprintf(stats_log, "vpmeas_eligible           : %10" PRIu64 " (%6.2f%%) // Eligible for value prediction.\n",
+              elig,   total  ? 100.0*elig/total   : 0.0);
+      fprintf(stats_log, "   vpmeas_miss            : %10" PRIu64 " (%6.2f%%) // VPU was unable to generate a value prediction (e.g., SVP miss).\n",
+              miss, total ? 100.0*miss/total : 0.0);
+      fprintf(stats_log, "   vpmeas_conf_corr       : %10" PRIu64 " (%6.2f%%) // VPU generated a confident and correct value prediction.\n",
+              conf_corr,   total ? 100.0*conf_corr/total   : 0.0);
+      fprintf(stats_log, "   vpmeas_conf_incorr     : %10" PRIu64 " (%6.2f%%) // VPU generated a confident and incorrect value prediction. (MISPREDICTION)\n",
+              conf_incorr,   total ? 100.0*conf_incorr/total   : 0.0);
+      fprintf(stats_log, "   vpmeas_unconf_corr     : %10" PRIu64 " (%6.2f%%) // VPU generated an unconfident and correct value prediction. (LOST OPPORTUNITY)\n",
+              unconf_corr,   total ? 100.0*unconf_corr/total   : 0.0);
+      fprintf(stats_log, "   vpmeas_unconf_incorr   : %10" PRIu64 " (%6.2f%%) // VPU generated an unconfident and incorrect value prediction.\n",
+              uncof_incorr,   total ? 100.0*uncof_incorr/total   : 0.0);
+   }
 
 #ifdef RISCV_MICRO_DEBUG
    fclose(this->fetch_log);

@@ -385,6 +385,15 @@ public:
    // The thread id.
    unsigned int Tid;
 
+   //value prediction counters
+   //TODO: Move them in a file
+   uint64_t vpmeas_ineligible;
+   uint64_t vpmeas_miss;
+   uint64_t vpmeas_conf_corr;
+   uint64_t vpmeas_conf_incorr;
+   uint64_t vpmeas_unconf_corr;
+   uint64_t vpmeas_unconf_incorr;
+
    // The simulator cycle.
    cycle_t cycle;
 
