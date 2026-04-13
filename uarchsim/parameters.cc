@@ -149,3 +149,19 @@ uint64_t stop_amt = 0xffffffffffffffff;
 
 uint64_t phase_interval = 10000;
 uint64_t verbose_phase_counters = true;
+
+// Value Prediction
+bool VP_PERFECT = false;
+bool VP_ENABLED = false;
+
+// vp eligible flags for the instructions
+bool predINTALU = false;
+bool predFPALU  = false;
+bool predLOAD   = false;
+
+// vp svp configuration
+unsigned int VPQ_SIZE      = 0;
+bool         VP_ORACLE_CONF = false;
+unsigned int SVP_INDEX_BITS = 0;
+unsigned int SVP_TAG_BITS   = 0;
+unsigned int SVP_CONF_MAX   = 0;

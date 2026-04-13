@@ -70,6 +70,14 @@ static void help() {
    fprintf(stderr, "  --L2=<SIZE>:<ASSOC>:<BLOCKSIZE>:<#MHSR>:<HITTIME>\tConfigure L2 $. Derived # sets must be power-of-2. Block size must be power-of-2.\n");
    fprintf(stderr, "  --L3=<SIZE>:<ASSOC>:<BLOCKSIZE>:<#MHSR>:<HITTIME>\tConfigure L3 $. Derived # sets must be power-of-2. Block size must be power-of-2.\n");
    fprintf(stderr, "  --MEMLAT=<latency>\tConfigure a fixed miss penalty for a miss in the LLC.\n");
+   //Add the vp related parameters in help
+   fprintf(stderr, "  --vp-perf=1\t\t\t\tEnable perfect value predictor.\n");
+   fprintf(stderr, "  --vp-svp=<VPQsize>,<oracleconf>,<#index_bits>,<#tag_bits>,<confmax>\n");
+   fprintf(stderr, "\t\t\t\t\tEnable SVP. VPQsize: # VPQ entries. oracleconf: 0=real, 1=oracle.\n");
+   fprintf(stderr, "\t\t\t\t\t#index_bits: SVP has 2^n entries. #tag_bits: 0=no tag.\n");
+   fprintf(stderr, "\t\t\t\t\tconfmax: confidence threshold.\n");
+   fprintf(stderr, "  --vp-eligible=<predINTALU>,<predFPALU>,<predLOAD>\n");
+   fprintf(stderr, "\t\t\t\t\tRequired with any --vp-xxx flag. 1=predict this class, 0=don't.\n");
    exit(1);
 }
 
@@ -391,6 +399,37 @@ static void endSimulation(int signal) {
    delete s_micro;
 }
 
+//function to configure the value prediction variables based on the parsed
+//input
+static void config_vp_svp(const char *config) {
+    unsigned int vpq_size, oracle_conf, index_bits, tag_bits, conf_max;
+    if (sscanf(config, "%u,%u,%u,%u,%u", &vpq_size, &oracle_conf, &index_bits, &tag_bits, &conf_max) != 5) 
+    {
+        fprintf(stderr, "Incorrect usage of --vp-svp=<VPQsize>,<oracleconf>,<#index_bits>,<#tag_bits>,<confmax>\n");
+        exit(-1);
+    }
+    VP_ENABLED      = true;
+    VPQ_SIZE        = vpq_size;
+    VP_ORACLE_CONF  = (oracle_conf ? true : false);
+    SVP_INDEX_BITS  = index_bits;
+    SVP_TAG_BITS    = tag_bits;
+    SVP_CONF_MAX    = conf_max;
+}
+
+//configure the eligibilities of the instructions for which value prediction
+//is to be performed
+static void config_vp_eligible(const char *config) {
+    unsigned int alu, fp, load;
+    if (sscanf(config, "%u,%u,%u", &alu, &fp, &load) != 3) 
+    {
+        fprintf(stderr, "Incorrect usage of --vp-eligible=<predINTALU>,<predFPALU>,<predLOAD>\n");
+        exit(-1);
+    }
+    predINTALU = (alu  ? true : false);
+    predFPALU  = (fp   ? true : false);
+    predLOAD   = (load ? true : false);
+}
+
 
 int main(int argc, char **argv) {
    bool debug = false;
@@ -425,6 +464,18 @@ int main(int argc, char **argv) {
    parser.option(0, "MEMLAT", 1, [&](const char *s) { L1_IC_MISS_LATENCY = L1_DC_MISS_LATENCY = L2_MISS_LATENCY = atoi(s); });
    parser.option(0, "perf", 1, [&](const char *s) { set_perfect_flags(s); });
    parser.option(0, "cp", 1, [&](const char *s) { NUM_CHECKPOINTS = atoi(s); });
+
+   //vp related options. 
+   //for perfect prediction
+   parser.option(0, "vp-perf", 1, [&](const char *s) {
+      VP_PERFECT  = true;
+      VP_ENABLED  = true;
+   });
+
+   //for vp-svp parse
+   parser.option(0, "vp-svp",      1, [&](const char *s) { config_vp_svp(s); });
+   //for vp-eligible
+   parser.option(0, "vp-eligible", 1, [&](const char *s) { config_vp_eligible(s); });
 
    parser.option(0, "bq", 1, [&](const char *s) {BQ_SIZE = atoi(s); AUTO_BQ_SIZE = false; });
    parser.option(0, "btbentries", 1, [&](const char *s) { BTB_ENTRIES = atoi(s); });
@@ -465,6 +516,7 @@ int main(int argc, char **argv) {
       FETCH_QUEUE_SIZE = 64; });
 
    auto argv1 = parser.parse(argv);
+
    if (!*argv1)
       help();
    std::vector<std::string> htif_args(argv1, (const char *const *) argv + argc);

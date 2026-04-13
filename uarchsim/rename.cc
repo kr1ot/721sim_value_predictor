@@ -76,6 +76,12 @@ void pipeline_t::rename2() {
 
       index = RENAME2[i].index;
 
+      //initialize all the instructions with value prediction flags
+      PAY.buf[index].predicted = false;
+      PAY.buf[index].vp_prediction = 0;
+      PAY.buf[index].vp_confident = false;
+
+
       // FIX_ME #1
       // Count the number of instructions in the rename bundle that need a checkpoint (most branches).
       // Count the number of instructions in the rename bundle that have a destination register.
@@ -181,6 +187,26 @@ void pipeline_t::rename2() {
          PAY.buf[index].branch_ID = REN->checkpoint();
       }
       // FIX_ME #5 END
+
+      //check for the value prediction of the instructions
+      if(eligible(&PAY.buf[index])){
+         //for perfect value prediction
+         if (VP_PERFECT){
+            //check if the instruction exists in the functional simulator
+            //this will give the perfect value for value prediction
+            if(PAY.buf[index].good_instruction){
+               //get the actual value from the debug 
+               db_t *actual = get_pipe()->peek(PAY.buf[index].db_index);
+
+               //update the prediction flags
+               PAY.buf[index].predicted = true;
+               PAY.buf[index].vp_prediction = actual->a_rdst[0].value;
+               PAY.buf[index].vp_confident = true;
+            }
+         }
+         //TODO: Add real value prediction
+      }
+      
    }
 
    //

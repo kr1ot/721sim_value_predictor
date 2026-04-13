@@ -414,6 +414,20 @@ pipeline_t::pipeline_t(
    fprintf(stats_log, "IBP_BHR_LENGTH = %d\n", IBP_BHR_LENGTH);
    fprintf(stats_log, "ENABLE_TRACE_CACHE = %d\n", (ENABLE_TRACE_CACHE ? 1 : 0));
 
+   //Added Value predictor configuration
+   fprintf(stderr, "\n=== VALUE PREDICTOR ============================================================\n\n");
+   fprintf(stderr, "VP-eligible configuration:\n");
+   fprintf(stderr, "   predINTALU = %d\n", predINTALU ? 1 : 0);
+   fprintf(stderr, "   predFPALU  = %d\n", predFPALU ? 1 : 0);
+   fprintf(stderr, "   predLOAD   = %d\n", predLOAD ? 1 : 0);
+   fprintf(stderr, "\n");
+
+   if (VP_PERFECT) {
+      fprintf(stderr, "VALUE PREDICTOR = perfect\n\n");
+      fprintf(stderr, "COST ACCOUNTING\n");
+      fprintf(stderr, "  Impossible.\n");
+   }
+
    fprintf(stats_log, "\n=== INTERNAL SIMULATOR STRUCTURES ===============================================\n\n");
 
    fprintf(stats_log, "PAYLOAD_BUFFER_SIZE = %d\n", PAY.get_size());
@@ -773,4 +787,30 @@ void pipeline_t::set_branch_misprediction(unsigned int al_index) {
 
 void pipeline_t::set_value_misprediction(unsigned int al_index) {
    REN->set_value_misprediction(al_index);
+}
+
+// This function checks value-prediction eligibility
+// predINTALU, predFPALU, and predLOAD are all "bool" types,
+// and are configured to be true or false based on corresponding
+// simulator arguments being 1 or 0, respectively
+bool pipeline_t::eligible(payload_t *pay) {
+   // printf("Checking for eligibility\n");
+   // printf("Check for flags:\n");
+   // printf("predINTALU = %d\n",predINTALU);
+   // printf("predFPALU = %d\n",predFPALU);
+   // printf("predLOAD = %d\n",predLOAD);
+   // printf("IS_PERFECT VP = %d\n",VP_PERFECT);
+
+   if (!pay->C_valid)
+      return(false); // Any instruction without a destination register is ineligible.
+
+   // If we reached this point, the instruction has a destination register  
+   if (IS_INTALU(pay->flags)) 
+      return(predINTALU);  // instr. is INTALU type.  It is eligible if predINTALU is configured "true" 
+   else if (IS_FPALU(pay->flags))
+      return(predFPALU);  // instr. is FPALU type.  It is eligible if predFPALU is configured "true"   
+   else if (IS_LOAD(pay->flags) && !IS_AMO(pay->flags)) 
+      return(predLOAD);   // instr. is a normal LOAD (not rare load-with-reserv). It is eligible if predLOAD is configured "true".   
+   else 
+      return(false);      // instr. is none of the above major types, so it is never eligible
 }

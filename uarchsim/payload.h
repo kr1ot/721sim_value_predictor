@@ -184,6 +184,13 @@ typedef struct {
                            // this is the branch's ID (its bit position
                            // in the Global Branch Mask).
 
+
+   //new fields for value prediction
+   // Value Prediction fields
+   bool     predicted;      // is the instruction value predicted
+   reg_t    vp_prediction;  // the value of prediction. 
+   bool     vp_confident;   // is the confidence high enough to inject value prediction
+
    ////////////////////////
    // Set by Dispatch Stage.
    ////////////////////////

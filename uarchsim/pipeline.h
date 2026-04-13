@@ -79,6 +79,8 @@
 #define IS_FP_OP(flags) ((flags) & (F_FCOMP | F_FMEM))
 #define IS_AMO(flags) ((flags) & (F_AMO))
 #define IS_CSR(flags) ((flags) & (F_CSR))
+#define IS_INTALU(flags) ((flags) & (F_ICOMP))
+#define IS_FPALU(flags) ((flags) & (F_FCOMP))
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -211,6 +213,8 @@ public:
    uint64_t get_arch_reg_value(int reg_id);
    uint64_t get_pc() { return get_state()->pc; }
    uint32_t get_instruction(uint64_t inst_pc);
+
+   bool eligible(payload_t *pay);
 
 private:
    //	sim_t* sim;

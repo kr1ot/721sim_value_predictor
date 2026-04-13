@@ -116,4 +116,15 @@ extern uint64_t stop_amt;
 extern uint64_t phase_interval;
 extern uint64_t verbose_phase_counters;
 
+extern bool VP_PERFECT;
+extern bool VP_ENABLED;
+extern bool predINTALU;
+extern bool predFPALU;
+extern bool predLOAD;
+extern unsigned int VPQ_SIZE;
+extern bool         VP_ORACLE_CONF;
+extern unsigned int SVP_INDEX_BITS;
+extern unsigned int SVP_TAG_BITS;
+extern unsigned int SVP_CONF_MAX;
+
 #endif //PARAMETERS_H
