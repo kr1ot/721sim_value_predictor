@@ -42,6 +42,8 @@
 
 #include "lsu.h"               // LOAD/STORE UNIT
 
+#include "vpu.h"               // Value Prediction Unit
+
 #include "debug.h"
 
 #include "stats.h"
@@ -360,6 +362,12 @@ private:
    CacheClass *L2C;
    CacheClass *L3C;
 
+   /////////////////////////////////////////////////////////////
+   // Value Prediction Unit
+   /////////////////////////////////////////////////////////////
+   vpu_t *VPU;
+   //TODO: Check what to do for branch checkpoint
+   uint32_t vpq_checkpoint_tail[64];
    //////////////////////
    // PRIVATE FUNCTIONS
    //////////////////////

@@ -53,6 +53,7 @@ void pipeline_t::rename2() {
    unsigned int bundle_dst, bundle_branch;
    unsigned int count_insn_need_checkpoint;
    unsigned int count_insn_has_dst;
+   unsigned int bundle_vp_eligible;  //count the vp eligible instructions in the rename bundle
 
    // Stall the rename2 sub-stage if either:
    // (1) There isn't a current rename bundle.
@@ -69,6 +70,7 @@ void pipeline_t::rename2() {
    bundle_branch = 0;
    count_insn_need_checkpoint = 0;
    count_insn_has_dst = 0;
+   bundle_vp_eligible = 0;
 
    for (i = 0; i < dispatch_width; i++) {
       if (!RENAME2[i].valid)
@@ -100,6 +102,8 @@ void pipeline_t::rename2() {
       if (PAY.buf[index].checkpoint) count_insn_need_checkpoint += 1;
       if (PAY.buf[index].C_valid) count_insn_has_dst += 1;
       // FIX_ME #1 END
+
+      if (VPU && eligible(&PAY.buf[index])) bundle_vp_eligible += 1;
    }
 
    // FIX_ME #2
@@ -117,6 +121,8 @@ void pipeline_t::rename2() {
    if (REN->stall_branch(count_insn_need_checkpoint)) return;
    if (REN->stall_reg(count_insn_has_dst)) return;
    // FIX_ME #2 END
+   //not enough entries in VPQ for all the eligible instructions
+   if (VPU && (VPU->vpq_free_count() < bundle_vp_eligible) && !VP_PERFECT) return;
 
    //
    // Sufficient resources are available to rename the rename bundle.
@@ -185,6 +191,8 @@ void pipeline_t::rename2() {
       // FIX_ME #5 BEGIN
       if (PAY.buf[index].checkpoint) {
          PAY.buf[index].branch_ID = REN->checkpoint();
+         //checkpoint the VPQ tail for the branch
+         if (VPU && !VP_PERFECT) vpq_checkpoint_tail[PAY.buf[index].branch_ID] = VPU->vpq_tail;
       }
       // FIX_ME #5 END
 
@@ -204,7 +212,32 @@ void pipeline_t::rename2() {
                PAY.buf[index].vp_confident = true;
             }
          }
-         //TODO: Add real value prediction
+         else if(VPU) {
+            //real prediction
+            uint64_t pred_val = 0;
+            bool confident = false;
+            uint32_t vpq_tail_out = 0;
+
+            // For oracle confidence, pass actual value from checker
+            uint64_t actual_val = 0;
+            if (VPU->oracle_conf && PAY.buf[index].good_instruction) {
+               db_t *actual   = get_pipe()->peek(PAY.buf[index].db_index);
+               actual_val      = actual->a_rdst[0].value;
+            }
+
+            bool hit = VPU->predict(PAY.buf[index].pc,
+                                    pred_val,
+                                    confident,
+                                    vpq_tail_out,
+                                    actual_val);
+
+            PAY.buf[index].predicted     = hit;
+            PAY.buf[index].vp_confident  = hit && confident;
+            PAY.buf[index].vp_prediction = pred_val;
+
+            // Always allocate VPQ entry for ALL VP-eligible instructions
+            PAY.buf[index].vp_vpq_idx = VPU->vpq_alloc(PAY.buf[index].pc);
+         }
       }
       
    }

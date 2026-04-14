@@ -36,10 +36,14 @@ void pipeline_t::squash_complete(reg_t jump_PC) {
    // FIX_ME #17c
    // Squash the renamer.
    //
-   REN->squash();
    // FIX_ME #17c BEGIN
+   REN->squash();
    // FIX_ME #17c END
 
+   //Repair the VPQ - full squash 
+   if (VPU && !VP_PERFECT){
+      VPU->full_flush();
+   }
 
    //////////////////////////
    // Dispatch Stage
@@ -127,6 +131,11 @@ void pipeline_t::resolve(unsigned int branch_ID, bool correct) {
 
       // Schedule Stage:
       IQ.squash(branch_ID);
+
+      //TODO: Need to check this logic for roll back
+      if (VPU && !VP_PERFECT){
+         VPU->repair_instances(vpq_checkpoint_tail[branch_ID]);
+      }
 
       for (i = 0; i < issue_width; i++) {
          // Register Read Stage:

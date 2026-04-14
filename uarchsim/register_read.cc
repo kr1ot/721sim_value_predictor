@@ -50,11 +50,10 @@ void pipeline_t::register_read(unsigned int lane_number) {
       if (PAY.buf[index].C_valid &&                   //has destination register
           (lat == 1)             &&                   //has 1 cycle latency
           !(IS_LOAD(PAY.buf[index].flags)) &&         //Is not a LOAD
-          !(IS_AMO(PAY.buf[index].flags)) &&          //Is not a AMO instruction
-          !(PAY.buf[index].predicted)                 //is not a value predicted instruction. This means the IQ wakeup is not required
-                                                      //and no need to explicitly set the ready flag is the instruction is predicted
-         ){           //Is not AMO
-            IQ.wakeup(PAY.buf[index].C_phys_reg,true);
+          !(IS_AMO(PAY.buf[index].flags))             //Is not a AMO instruction
+         ){      
+            if(!(PAY.buf[index].vp_confident))            //is not a value predicted instruction. This means the IQ wakeup is not required
+               IQ.wakeup(PAY.buf[index].C_phys_reg,true);
             REN->set_ready(PAY.buf[index].C_phys_reg);
           }
       // FIX_ME #11a END

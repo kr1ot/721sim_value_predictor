@@ -458,6 +458,17 @@ pipeline_t::pipeline_t(
    vpmeas_unconf_corr = 0;
    vpmeas_unconf_incorr = 0;
 
+   //Initialize VPU
+   if (VP_ENABLED){
+      VPU = new vpu_t(VPQ_SIZE, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, VP_ORACLE_CONF);
+   }
+   else{
+      VPU = nullptr;
+   }
+
+   //TODO: Check this
+   memset(vpq_checkpoint_tail, 0, sizeof(vpq_checkpoint_tail));
+
    ///////////////////////////////////////////////////
    // Set up the memory system.
    ///////////////////////////////////////////////////
@@ -513,6 +524,10 @@ pipeline_t::~pipeline_t() {
               unconf_corr,   total ? 100.0*unconf_corr/total   : 0.0);
       fprintf(stats_log, "   vpmeas_unconf_incorr   : %10" PRIu64 " (%6.2f%%) // VPU generated an unconfident and incorrect value prediction.\n",
               uncof_incorr,   total ? 100.0*uncof_incorr/total   : 0.0);
+   }
+   if (VPU){
+      delete VPU;
+      VPU = nullptr;
    }
 
 #ifdef RISCV_MICRO_DEBUG
