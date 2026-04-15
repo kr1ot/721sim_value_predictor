@@ -150,7 +150,7 @@ void pipeline_t::retire(size_t &instret) {
                         else if (vpq_entry.confident && !correct)
                            vpmeas_conf_incorr++;
                         //not confident and correct
-                        else if (vpq_entry.confident && correct)
+                        else if (!vpq_entry.confident && correct)
                            vpmeas_unconf_corr++;
                         //not confident and incorrect
                         else

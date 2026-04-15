@@ -197,9 +197,6 @@ void pipeline_t::rename2() {
 
          if(VPU) {
             if (!VP_PERFECT){
-               //perform a perdiction
-               uint64_t pred_val = 0;
-               bool confident = false;
 
                // For oracle confidence, pass actual value from checker
                uint64_t actual_val = 0;
