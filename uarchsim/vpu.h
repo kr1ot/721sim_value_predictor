@@ -3,6 +3,8 @@
 
 #include <cinttypes>
 #include <cassert>
+#include <cmath>
+
 
 //////////////////////////
 //SVP entry structure
@@ -120,8 +122,13 @@ public:
     void repair_instances(uint32_t rollback_tail, bool rollback_tail_phase);
     void full_flush();
 
-    //Compute all the bits required for VPU 
-    uint64_t svp_storage_bytes();
+    //hardware cost computatio helper functions
+    uint32_t get_conf_bits()     { return (uint32_t)ceil(log2((double)(conf_max + 1))); }
+    uint32_t get_instance_bits() { return (uint32_t)ceil(log2((double)vpq_size)); }
+    uint32_t get_bits_per_entry(){ return tag_bits + get_conf_bits() + 64 + 64 + get_instance_bits(); }
+    uint64_t get_total_bits()    { return (uint64_t)get_bits_per_entry() * svp_num_entries; }
+    //ceil operation 1bit is still shown as 1B
+    uint64_t svp_storage_bytes() { return ceil(get_total_bits() / 8); } 
 };
 
 #endif // VPU_H

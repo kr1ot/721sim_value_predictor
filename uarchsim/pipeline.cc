@@ -414,19 +414,61 @@ pipeline_t::pipeline_t(
    fprintf(stats_log, "IBP_BHR_LENGTH = %d\n", IBP_BHR_LENGTH);
    fprintf(stats_log, "ENABLE_TRACE_CACHE = %d\n", (ENABLE_TRACE_CACHE ? 1 : 0));
 
-   //Added Value predictor configuration
-   fprintf(stderr, "\n=== VALUE PREDICTOR ============================================================\n\n");
-   fprintf(stderr, "VP-eligible configuration:\n");
-   fprintf(stderr, "   predINTALU = %d\n", predINTALU ? 1 : 0);
-   fprintf(stderr, "   predFPALU  = %d\n", predFPALU ? 1 : 0);
-   fprintf(stderr, "   predLOAD   = %d\n", predLOAD ? 1 : 0);
-   fprintf(stderr, "\n");
 
-   if (VP_PERFECT) {
-      fprintf(stderr, "VALUE PREDICTOR = perfect\n\n");
-      fprintf(stderr, "COST ACCOUNTING\n");
-      fprintf(stderr, "  Impossible.\n");
+   ///////////////////////////////////////////////////
+   //  Value predictor configuration
+   ///////////////////////////////////////////////////
+   // Initialize VP measurement counters
+   vpmeas_ineligible = 0;
+   vpmeas_miss = 0;
+   vpmeas_conf_corr = 0;
+   vpmeas_conf_incorr = 0;
+   vpmeas_unconf_corr = 0;
+   vpmeas_unconf_incorr = 0;
+
+   //Initialize VPU
+   if (VP_ENABLED){
+      VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, VP_ORACLE_CONF);
    }
+   else{
+      VPU = nullptr;
+   }
+   fprintf(stats_log, "\n=== VALUE PREDICTOR ============================================================\n\n");
+   fprintf(stats_log, "VP-eligible configuration:\n");
+   fprintf(stats_log, "   predINTALU = %d\n", predINTALU ? 1 : 0);
+   fprintf(stats_log, "   predFPALU  = %d\n", predFPALU ? 1 : 0);
+   fprintf(stats_log, "   predLOAD   = %d\n", predLOAD ? 1 : 0);
+   fprintf(stats_log, "\n");
+   if (VP_PERFECT) {
+      fprintf(stats_log, "VALUE PREDICTOR = perfect\n\n");
+      fprintf(stats_log, "COST ACCOUNTING\n");
+      fprintf(stats_log, "  Impossible.\n");
+   }
+   else {
+    fprintf(stats_log, "VALUE PREDICTOR = stride (Project 4 spec. implementation)\n");
+    fprintf(stats_log, "   VPQsize         = %u\n",  VPQ_SIZE);
+    fprintf(stats_log, "   oracleconf      = %d (%s)\n",
+            VP_ORACLE_CONF ? 1 : 0,
+            VP_ORACLE_CONF ? "oracle confidence" : "real confidence");
+    fprintf(stats_log, "   # index bits    = %u\n",  SVP_INDEX_BITS);
+    fprintf(stats_log, "   # tag bits      = %u\n",  SVP_TAG_BITS);
+    fprintf(stats_log, "   confmax         = %u\n", SVP_CONF_MAX);
+    fprintf(stats_log, "\n");
+
+    fprintf(stats_log, "COST ACCOUNTING\n");
+    fprintf(stats_log, "   One SVP entry:\n");
+    fprintf(stats_log, "      tag           : %2u bits  // num_tag_bits\n",SVP_TAG_BITS);
+    fprintf(stats_log, "      conf          : %2u bits  // formula: (uint64_t)ceil(log2((double)(confmax+1)))\n",VPU->get_conf_bits());
+    fprintf(stats_log, "      retired_value :  64 bits  // RISCV64 integer size.\n");
+    fprintf(stats_log, "      stride        :  64 bits  // RISCV64 integer size."
+            " Competition opportunity: truncate stride to far fewer bits"
+            " based on stride distribution of stride-predictable instructions.\n");
+    fprintf(stats_log, "      instance ctr  : %2u bits  // formula: (uint64_t)ceil(log2((double)VPQsize))\n",VPU->get_instance_bits());
+    fprintf(stats_log, "      -------------------------\n");
+    fprintf(stats_log, "      bits/SVP entry: %u bits\n", VPU->get_bits_per_entry());
+    fprintf(stats_log, "   Total storage cost (bits) = (%u SVP entries x %u bits/SVP entry) = %lu bits\n",VPU->svp_num_entries, VPU->get_bits_per_entry(), VPU->get_total_bits());
+    fprintf(stats_log, "   Total storage cost (bytes) = %.2f B (%.2f KB)\n",(double)VPU->svp_storage_bytes(), (double)VPU->svp_storage_bytes() / 1024.0);
+}
 
    fprintf(stats_log, "\n=== INTERNAL SIMULATOR STRUCTURES ===============================================\n\n");
 
@@ -445,26 +487,6 @@ pipeline_t::pipeline_t(
    //REN_INT->set_stats(get_stats());
    //  FIX_ME
    //  FetchUnit->set_stats(get_stats());
-
-   ///////////////////////////////////////////////////
-   // Set up memory prediction counters
-   ///////////////////////////////////////////////////
-   //TODO: Move these in a file
-   // Initialize VP measurement counters
-   vpmeas_ineligible = 0;
-   vpmeas_miss = 0;
-   vpmeas_conf_corr = 0;
-   vpmeas_conf_incorr = 0;
-   vpmeas_unconf_corr = 0;
-   vpmeas_unconf_incorr = 0;
-
-   //Initialize VPU
-   if (VP_ENABLED){
-      VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, VP_ORACLE_CONF);
-   }
-   else{
-      VPU = nullptr;
-   }
 
    ///////////////////////////////////////////////////
    // Set up the memory system.
@@ -525,20 +547,13 @@ pipeline_t::~pipeline_t() {
       uint64_t total = inelig + elig;
 
       fprintf(stats_log, "VPU MEASUREMENTS-----------------------------------\n");
-      fprintf(stats_log, "vpmeas_ineligible         : %10" PRIu64 " (%6.2f%%) // Not eligible for value prediction.\n",
-              inelig, total  ? 100.0*inelig/total : 0.0);
-      fprintf(stats_log, "vpmeas_eligible           : %10" PRIu64 " (%6.2f%%) // Eligible for value prediction.\n",
-              elig,   total  ? 100.0*elig/total   : 0.0);
-      fprintf(stats_log, "   vpmeas_miss            : %10" PRIu64 " (%6.2f%%) // VPU was unable to generate a value prediction (e.g., SVP miss).\n",
-              miss, total ? 100.0*miss/total : 0.0);
-      fprintf(stats_log, "   vpmeas_conf_corr       : %10" PRIu64 " (%6.2f%%) // VPU generated a confident and correct value prediction.\n",
-              conf_corr,   total ? 100.0*conf_corr/total   : 0.0);
-      fprintf(stats_log, "   vpmeas_conf_incorr     : %10" PRIu64 " (%6.2f%%) // VPU generated a confident and incorrect value prediction. (MISPREDICTION)\n",
-              conf_incorr,   total ? 100.0*conf_incorr/total   : 0.0);
-      fprintf(stats_log, "   vpmeas_unconf_corr     : %10" PRIu64 " (%6.2f%%) // VPU generated an unconfident and correct value prediction. (LOST OPPORTUNITY)\n",
-              unconf_corr,   total ? 100.0*unconf_corr/total   : 0.0);
-      fprintf(stats_log, "   vpmeas_unconf_incorr   : %10" PRIu64 " (%6.2f%%) // VPU generated an unconfident and incorrect value prediction.\n",
-              uncof_incorr,   total ? 100.0*uncof_incorr/total   : 0.0);
+      fprintf(stats_log, "vpmeas_ineligible         : %lu (%.2f%%) // Not eligible for value prediction.\n",inelig, 100.0 * (double)inelig / (double)total);
+      fprintf(stats_log, "vpmeas_eligible           : %lu (%.2f%%) // Eligible for value prediction.\n",elig, 100.0 * (double)elig / (double)total);
+      fprintf(stats_log, "   vpmeas_miss            : %lu (%.2f%%) // VPU was unable to generate a value prediction (e.g., SVP miss).\n",miss, 100.0 * (double)miss / (double)total);
+      fprintf(stats_log, "   vpmeas_conf_corr       : %lu (%.2f%%) // VPU generated a confident and correct value prediction.\n",conf_corr, 100.0 * (double)conf_corr / (double)total);
+      fprintf(stats_log, "   vpmeas_conf_incorr     : %lu (%.2f%%) // VPU generated a confident and incorrect value prediction. (MISPREDICTION)\n",conf_incorr, 100.0 * (double)conf_incorr / (double)total);
+      fprintf(stats_log, "   vpmeas_unconf_corr     : %lu (%.2f%%) // VPU generated an unconfident and correct value prediction. (LOST OPPORTUNITY)\n",unconf_corr, 100.0 * (double)unconf_corr / (double)total);
+      fprintf(stats_log, "   vpmeas_unconf_incorr   : %lu (%.2f%%) // VPU generated an unconfident and incorrect value prediction.\n",uncof_incorr, 100.0 * (double)uncof_incorr / (double)total);
    }
    if (VPU){
       delete VPU;

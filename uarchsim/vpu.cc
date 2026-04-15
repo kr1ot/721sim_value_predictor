@@ -307,15 +307,3 @@ void vpu_t::full_flush() {
     vpq_tail       = vpq_head;
     vpq_tail_phase = vpq_head_phase;
 }
-
-//Storage cose for VPU
-uint64_t vpu_t::svp_storage_bytes() {
-   uint32_t conf_bits = 0;
-   uint64_t cm = conf_max;
-   while (cm > 0) { conf_bits++; cm >>= 1; }
-   if (conf_bits == 0) conf_bits = 1;
-
-   uint32_t bits_per_entry = tag_bits + conf_bits + 64 + 64 + 64;
-   uint64_t total_bits     = (uint64_t)bits_per_entry * svp_num_entries;
-   return (total_bits + 7) / 8;
-}
