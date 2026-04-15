@@ -187,10 +187,8 @@ typedef struct {
 
    //new fields for value prediction
    // Value Prediction fields
-   bool     predicted;      // is the instruction value predicted
-   reg_t    vp_prediction;  // the value of prediction. 
-   bool     vp_confident;   // is the confidence high enough to inject value prediction
-   uint32_t vp_vpq_idx;     // Index of VPQ entry
+   bool     is_eligible;      // is the instruction eligible for value prediction
+   uint32_t vp_vpq_idx;       // Index of VPQ entry
 
    ////////////////////////
    // Set by Dispatch Stage.

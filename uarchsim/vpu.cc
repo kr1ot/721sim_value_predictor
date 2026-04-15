@@ -1,7 +1,8 @@
 #include "vpu.h"
-#include <cstring>
+#include <cassert>
 
 vpu_t::vpu_t(uint32_t vpq_size,
+             uint32_t num_chkpts,
              uint32_t index_bits,
              uint32_t tag_bits,
              uint64_t conf_max,
@@ -12,31 +13,53 @@ vpu_t::vpu_t(uint32_t vpq_size,
     this->tag_bits        = tag_bits;
     this->conf_max        = conf_max;
     this->oracle_conf     = oracle_conf;
+    this->num_chkpts      = num_chkpts;
 
     svp_num_entries = (1u << index_bits);
 
     //vpq circular buffer
     vpq_head        = 0;
     vpq_tail        = 0;
-    vpq_count       = 0;
+    vpq_head_phase = false;
+    vpq_tail_phase = false;
 
     svp = new svp_entry_t[svp_num_entries];
     //invalidate all the entries of the SVP table
     //they will updated when adding an entry in the table
     for (uint64_t i = 0; i < svp_num_entries; i++){
-        svp[i].valid = false;
+        svp[i].tag = 0;
+        svp[i].conf = 0;
+        svp[i].retired_value= 0;
+        svp[i].stride = 0;
+        svp[i].instance = 0;
     }
 
     vpq = new vpq_entry_t[vpq_size];
     //same for VPQ
     for (uint64_t i = 0; i < vpq_size; i++){
-        vpq[i].valid = false;
+        vpq[i].valid = false; //TODO: check if required
+
+        vpq[i].predicted = false;
+        vpq[i].confident = false;
+        vpq[i].pc = 0;
+        vpq[i].value = 0;
+        vpq[i].vp_val = 0;
     }
+
+    vpq_checkpoint_tail = new uint32_t[num_chkpts];
+    vpq_checkpoint_tail_phase = new bool[num_chkpts];
+    for (uint32_t i = 0; i < num_chkpts;i++){
+        vpq_checkpoint_tail[i] = 0;
+        vpq_checkpoint_tail_phase[i] = false;
+    }
+
 }
 
 vpu_t::~vpu_t() {
     delete[] svp;
     delete[] vpq;
+    delete[] vpq_checkpoint_tail;
+    delete[] vpq_checkpoint_tail_phase;
 }
 
 //index and tag related functions
@@ -58,23 +81,60 @@ uint64_t vpu_t::get_tag(uint64_t pc) {
     return (pc >> (2 + index_bits)) & mask;
 }
 
-//check if VPQ has a free entry
-bool vpu_t::vpq_has_free() {
-    return (vpq_count < vpq_size);
+uint32_t vpu_t::vpq_free_count() {
+    if (vpq_tail_phase == vpq_head_phase)
+        return vpq_size - (vpq_tail - vpq_head);
+    else
+        return vpq_head - vpq_tail;
 }
 
-//count the number of free entries in VPQ
-uint32_t vpu_t::vpq_free_count() {
-    return vpq_size - vpq_count;
+uint32_t vpu_t::vpq_alloc(uint64_t pc) {
+
+    //get the tail index where new entry is to be allocated in VPQ
+    uint32_t idx = vpq_tail;
+
+    vpq[idx].pc = pc;
+    vpq[idx].value = 0;
+    //TODO: Check if required
+    vpq[idx].valid = true;
+
+    //speculative
+    vpq[idx].vp_val = 0;
+    vpq[idx].predicted = false;
+    vpq[idx].confident = false;
+
+    vpq_tail++;
+    if (vpq_tail == vpq_size) {
+        vpq_tail = 0;
+        vpq_tail_phase = !vpq_tail_phase;
+    }
+    //return the index where entry was allocated
+    return idx;
+}
+
+//write value to the VPQ index
+void vpu_t::vpq_write_value(uint32_t vpq_idx, uint64_t value) {
+    //only write if the entry was valid
+    assert(vpq[vpq_idx].valid);   //only used as debug
+
+    vpq[vpq_idx].value       = value;
+}
+
+void vpu_t::vpq_checkpoint(uint32_t branch_ID) {
+    vpq_checkpoint_tail[branch_ID] = vpq_tail;
+    vpq_checkpoint_tail_phase[branch_ID] = vpq_tail_phase;
+}
+
+void vpu_t::vpq_repair(uint32_t branch_ID) {
+    repair_instances(vpq_checkpoint_tail[branch_ID],
+                     vpq_checkpoint_tail_phase[branch_ID]);
 }
 
 /////////////////////////////////
 // Prediction from VPU
 /////////////////////////////////
-bool vpu_t::predict(uint64_t  pc,
-                    uint64_t &pred_value,
-                    bool     &confident,
-                    uint32_t &vpq_tail_out,
+void vpu_t::predict(uint64_t  pc,
+                    uint32_t vpq_idx,
                     uint64_t  actual_value)
 {
     uint64_t pc_index = get_index(pc);
@@ -84,14 +144,14 @@ bool vpu_t::predict(uint64_t  pc,
     svp_entry_t &svp_entry = svp[pc_index];
 
     // hit = entry valid AND tag matches (or no tags used)
-    bool hit = svp_entry.valid && (svp_entry.tag == pc_tag);
+    bool hit = svp_entry.tag == pc_tag;
 
     //if SVP entry missed,
     if (!hit) {
-        confident    = false;
-        pred_value   = 0;
-        vpq_tail_out = vpq_tail;
-        return false;
+        vpq[vpq_idx].confident = false;
+        vpq[vpq_idx].predicted = false;
+        vpq[vpq_idx].vp_val = 0;
+        return;
     }
     //if SVP entry hit
 
@@ -99,8 +159,9 @@ bool vpu_t::predict(uint64_t  pc,
     svp_entry.instance++;
 
     // prediction = retired_value + instance * stride
-    pred_value = (uint64_t)((int64_t)svp_entry.retired_value + svp_entry.instance * svp_entry.stride);
+    uint64_t pred_value = (uint64_t)((int64_t)svp_entry.retired_value + svp_entry.instance * svp_entry.stride);
 
+    bool confident;
     // decide the confidence
     if (oracle_conf) {
         // oracle mode: confident only if prediction matches actual checker value
@@ -111,40 +172,9 @@ bool vpu_t::predict(uint64_t  pc,
         confident = (svp_entry.conf == conf_max);
     }
 
-    //provide the tail index at which this prediction was done
-    vpq_tail_out = vpq_tail;
-    //return true since prediction was made
-    return true;
-}
-
-
-uint32_t vpu_t::vpq_alloc(uint64_t pc) {
-    //Should have reached here only if there were some free entries   
-    assert(vpq_count < vpq_size);
-
-    //get the tail index where new entry is to be allocated in VPQ
-    uint32_t idx     = vpq_tail;
-    vpq[idx].pc          = pc;
-    vpq[idx].value       = 0;
-    vpq[idx].value_ready = false;
-    vpq[idx].valid       = true;
-
-    vpq_tail++;
-    if (vpq_tail == vpq_size) {
-        vpq_tail = 0;
-    }
-    //increment the vpq count to track the number of entries in the VPQ
-    vpq_count++;
-    //return the index where entry was allocated
-    return idx;
-}
-
-//write value to the VPQ index
-void vpu_t::vpq_write_value(uint32_t vpq_idx, uint64_t value) {
-    //only write if the entry was valid
-    assert(vpq[vpq_idx].valid);
-    vpq[vpq_idx].value       = value;
-    vpq[vpq_idx].value_ready = true;
+    vpq[vpq_idx].confident = confident;
+    vpq[vpq_idx].predicted = true;
+    vpq[vpq_idx].vp_val = pred_value;
 }
 
 ///////////////////////////////////
@@ -157,7 +187,6 @@ void vpu_t::train(uint32_t vpq_idx) {
     //whether the entry is valid and has the value ready by the moment
     //this function was called
     assert(vpq[vpq_idx].valid);
-    assert(vpq[vpq_idx].value_ready);
 
     //get the necessary variables
     uint64_t pc = vpq[vpq_idx].pc;
@@ -167,7 +196,7 @@ void vpu_t::train(uint32_t vpq_idx) {
     svp_entry_t &svp_entry = svp[pc_index];
 
     //check if the entry hit in SVP
-    bool hit = svp_entry.valid && (svp_entry.tag == pc_tag);
+    bool hit = (svp_entry.tag == pc_tag);
 
     //if hit then train the svp
     if (hit) {
@@ -191,85 +220,92 @@ void vpu_t::train(uint32_t vpq_idx) {
 
     //if miss in SVP, then allocate a new entry/replace
     else {
-        
-        // Walk VPQ from H+1 to T to count matching in-flight entries
-        // This sets the initial instance counter for the new entry
-        uint32_t in_flight = 0;
-        //since not including head
-        uint32_t remaining = vpq_count - 1;
-        //go through all the entries till tail
-        for (uint32_t i = 0; i < remaining; i++) {
-            //ensure roll over
-            uint32_t pos = (vpq_head + 1 + i) % vpq_size;
-            if (vpq[pos].valid) {
-                //if the pc exists in the VPQ
-                if (pc == vpq[pos].pc) {
-                in_flight++;
-                }
-            }
-        }
+        // Count in-flight instances by walking VPQ head+1 to tail
+        int64_t in_flight = 0;
 
-        //initialize the SVp entry
-        svp_entry.valid         = true;
+        uint32_t i = (vpq_head + 1) % vpq_size;
+        
+        // Use free count to determine how many to walk
+        uint32_t to_walk = (vpq_free_count() == 0) ? (vpq_size - 1) :
+                           (vpq_size - vpq_free_count() - 1);
+
+        for (uint32_t n = 0; n < to_walk; n++) {
+            if (vpq[i].pc == pc)
+                in_flight++;
+            i = (i + 1) % vpq_size;
+        }
         svp_entry.tag           = pc_tag;
         svp_entry.conf          = 0;
         svp_entry.retired_value = value;
-        svp_entry.stride        = (int64_t)value;  // retired_value = stride = value 
+        svp_entry.stride        = (int64_t)value;
         svp_entry.instance      = in_flight;
     }
 
     // Free VPQ head
     vpq[vpq_idx].valid = false;
-    vpq_head  = (vpq_head + 1) % vpq_size;
-    vpq_count--;
+    vpq_head++;
+    if(vpq_head == vpq_size){
+        vpq_head = 0;
+        vpq_head_phase = !vpq_head_phase;
+    }
 }
 
 //repair after a squash
-void vpu_t::repair_instances(uint32_t rollback_tail) {
+void vpu_t::repair_instances(uint32_t rollback_tail, bool rollback_tail_phase) {
+    uint32_t entries_to_free;
+    //get the entries to free value based on the tail phase
+    //tail has not rolled over
+    if (vpq_tail_phase == rollback_tail_phase)
+        entries_to_free = vpq_tail - rollback_tail;
+    //tail has rolled over
+    else
+        entries_to_free = vpq_size - rollback_tail + vpq_tail;
 
-    while (vpq_tail != rollback_tail) {
-        //roll over logic for vpq_tail
-        vpq_tail = (vpq_tail == 0) ? (vpq_size - 1) : (vpq_tail - 1);
-
-        if (vpq[vpq_tail].valid) {
-            uint64_t pc_index = get_index(vpq[vpq_tail].pc);
-            uint64_t pc_tag = get_tag(vpq[vpq_tail].pc);
-            svp_entry_t &svp_entry = svp[pc_index];
-
-            bool hit = svp_entry.valid && ((tag_bits == 0) || (svp_entry.tag == pc_tag));
-            if (hit) svp_entry.instance--;   // undo speculative increment from Rename
-
-            vpq[vpq_tail].valid = false;
-            vpq_count--;
+    for (uint32_t n = 0; n < entries_to_free; n++) {
+        if (vpq_tail == 0) {
+            vpq_tail       = vpq_size - 1;
+            vpq_tail_phase = !vpq_tail_phase;
+        } 
+        else {
+            vpq_tail--;
         }
+
+        uint64_t pc_index = get_index(vpq[vpq_tail].pc);
+        uint64_t pc_tag   = get_tag(vpq[vpq_tail].pc);
+        svp_entry_t &svp_entry = svp[pc_index];
+        bool hit = svp_entry.tag == pc_tag;
+
+        if (hit) svp_entry.instance--;
+        vpq[vpq_tail].valid       = false;
     }
+    //to be sure I reached the right point
+    assert(vpq_tail       == rollback_tail);
+    assert(vpq_tail_phase == rollback_tail_phase);
 }
 
 void vpu_t::full_flush() {
-    // Walk forward from head to tail, repairing instance counters
-    // and freeing ALL entries including the head
+    uint32_t entries_to_free;
+
+    if (vpq_tail_phase == vpq_head_phase)
+        entries_to_free = vpq_tail - vpq_head;
+    else
+        entries_to_free = vpq_size - vpq_head + vpq_tail;
+
     uint32_t i = vpq_head;
-    uint32_t remaining = vpq_count;
+    for (uint32_t n = 0; n < entries_to_free; n++) {
+        uint64_t pc_index = get_index(vpq[i].pc);
+        uint64_t pc_tag   = get_tag(vpq[i].pc);
 
-    for (uint32_t n = 0; n < remaining; n++) {
-        if (vpq[i].valid) {
-            uint64_t pc_index = get_index(vpq[i].pc);
-            uint64_t pc_tag   = get_tag(vpq[i].pc);
-            svp_entry_t &entry = svp[pc_index];
+        svp_entry_t &svp_entry = svp[pc_index];
+        bool hit = svp_entry.tag == pc_tag;
 
-            bool hit = entry.valid &&
-                        ((tag_bits == 0) || (entry.tag == pc_tag));
-            if (hit) entry.instance--;
+        if (hit) svp_entry.instance--;
 
-            vpq[i].valid       = false;
-            vpq[i].value_ready = false;
-        }
+        vpq[i].valid = false;
         i = (i + 1) % vpq_size;
     }
-
-    // Reset VPQ to empty
-    vpq_tail  = vpq_head;
-    vpq_count = 0;
+    vpq_tail       = vpq_head;
+    vpq_tail_phase = vpq_head_phase;
 }
 
 //Storage cose for VPU

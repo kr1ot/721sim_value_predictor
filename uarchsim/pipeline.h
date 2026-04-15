@@ -366,8 +366,9 @@ private:
    // Value Prediction Unit
    /////////////////////////////////////////////////////////////
    vpu_t *VPU;
-   //TODO: Check what to do for branch checkpoint
-   uint32_t vpq_checkpoint_tail[64];
+   
+   //check if the vp_prediction is to be used or not
+   bool use_vp(unsigned int index);
    //////////////////////
    // PRIVATE FUNCTIONS
    //////////////////////

@@ -460,14 +460,11 @@ pipeline_t::pipeline_t(
 
    //Initialize VPU
    if (VP_ENABLED){
-      VPU = new vpu_t(VPQ_SIZE, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, VP_ORACLE_CONF);
+      VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, VP_ORACLE_CONF);
    }
    else{
       VPU = nullptr;
    }
-
-   //TODO: Check this
-   memset(vpq_checkpoint_tail, 0, sizeof(vpq_checkpoint_tail));
 
    ///////////////////////////////////////////////////
    // Set up the memory system.
@@ -475,6 +472,24 @@ pipeline_t::pipeline_t(
 
    reset(true);
    mmu->set_processor(this);
+}
+
+//return true if the instruction is confident in the value prediction
+bool pipeline_t::use_vp(unsigned int index){
+
+   //check if the instruction is not eligible for value prediction
+   if (!PAY.buf[index].is_eligible) return false;
+
+   //for perfect value prediction, it is true if a corresponding instruction is found
+   //in functional simulator
+   if (VP_PERFECT)
+      return PAY.buf[index].good_instruction;
+
+   //if VPU exists, then return based on the confidence of the prediction
+   if (VPU)
+      return VPU->vpq[PAY.buf[index].vp_vpq_idx].confident;
+   
+   return false;
 }
 
 

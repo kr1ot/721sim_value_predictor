@@ -52,7 +52,7 @@ void pipeline_t::register_read(unsigned int lane_number) {
           !(IS_LOAD(PAY.buf[index].flags)) &&         //Is not a LOAD
           !(IS_AMO(PAY.buf[index].flags))             //Is not a AMO instruction
          ){      
-            if(!(PAY.buf[index].vp_confident))            //is not a value predicted instruction. This means the IQ wakeup is not required
+            if(!(use_vp(index)))            //is not a value predicted instruction. This means the IQ wakeup is not required
                IQ.wakeup(PAY.buf[index].C_phys_reg,true);
             REN->set_ready(PAY.buf[index].C_phys_reg);
           }

@@ -76,24 +76,27 @@ void pipeline_t::execute(unsigned int lane_number) {
             if (hit && PAY.buf[index].C_valid) {
                REN->set_ready(PAY.buf[index].C_phys_reg);
                //wakeup the ports only if the value is not predicted
-               if (!(PAY.buf[index].vp_confident)){
+               if (!(use_vp(index))){
                   IQ.wakeup(PAY.buf[index].C_phys_reg,true);
                   REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
                }
                //when predicted check for value misprediction
                else{
-                  //if incorrect prediction
-                  if(PAY.buf[index].C_value.dw != PAY.buf[index].vp_prediction){
-                     //set the misprediction flag
-                     set_value_misprediction(PAY.buf[index].AL_index);
-                     //write the correct value into PRF
-                     REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
+                  //look for this only when not VP_PERFECT
+                  if (!VP_PERFECT){
+                     //if incorrect prediction
+                     if(PAY.buf[index].C_value.dw != VPU->vpq[PAY.buf[index].vp_vpq_idx].vp_val){
+                        //set the misprediction flag
+                        set_value_misprediction(PAY.buf[index].AL_index);
+                        //write the correct value into PRF
+                        REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
+                     }
+                     //otherwise no need to write to PRF as the correct value was available
                   }
-                  //otherwise no need to write to PRF as the correct value was available
+                  
                }
-
                //Write the executed value into VPQ
-               if (VPU && eligible(&PAY.buf[index]) && !VP_PERFECT){
+               if (VPU && PAY.buf[index].is_eligible && !VP_PERFECT){
                   VPU->vpq_write_value(PAY.buf[index].vp_vpq_idx, PAY.buf[index].C_value.dw);
                }
             }
@@ -153,13 +156,15 @@ void pipeline_t::execute(unsigned int lane_number) {
 
          // FIX_ME #14 BEGIN
          if (PAY.buf[index].C_valid) {
-            //if value is predicted check for misprediction
-            if(PAY.buf[index].vp_confident){
-               if (PAY.buf[index].C_value.dw != PAY.buf[index].vp_prediction){
-                  set_value_misprediction(PAY.buf[index].AL_index);
-                  REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
+            //if value is confident check for misprediction
+            if(use_vp(index)){
+               if (!VP_PERFECT){
+                  if (PAY.buf[index].C_value.dw != VPU->vpq[PAY.buf[index].vp_vpq_idx].vp_val){
+                     set_value_misprediction(PAY.buf[index].AL_index);
+                     REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].C_value.dw);
+                  }
+               //else no need to write to PRF}
                }
-               //else no need to write to PRF
             }
             //when value is not predicted, write to the PRF
             else{
@@ -167,7 +172,7 @@ void pipeline_t::execute(unsigned int lane_number) {
             }
             
             //Write the executed value into VPQ
-            if (VPU && eligible(&PAY.buf[index]) && !VP_PERFECT){
+            if (VPU && PAY.buf[index].is_eligible && !VP_PERFECT){
                VPU->vpq_write_value(PAY.buf[index].vp_vpq_idx, PAY.buf[index].C_value.dw);
             }
          }
@@ -230,7 +235,7 @@ void pipeline_t::execute(unsigned int lane_number) {
           !(IS_LOAD(PAY.buf[index].flags)) &&         //Is not a LOAD
           !(IS_AMO(PAY.buf[index].flags))          //is not AMO 
          ){           
-            if(!(PAY.buf[index].vp_confident))                 //is not predicted
+            if(!(use_vp(index)))                 //is not predicted
                IQ.wakeup(PAY.buf[index].C_phys_reg,true);
             REN->set_ready(PAY.buf[index].C_phys_reg);
           }
@@ -290,13 +295,15 @@ void pipeline_t::load_replay() {
          REN->set_ready(PAY.buf[index].C_phys_reg);
 
          //check if predicted
-         if (PAY.buf[index].vp_confident) {
-            //misprediction
-            if (PAY.buf[index].C_value.dw != PAY.buf[index].vp_prediction) {
-               set_value_misprediction(PAY.buf[index].AL_index);
-               REN->write(PAY.buf[index].C_phys_reg, PAY.buf[index].C_value.dw);
+         if (use_vp(index)) {
+            if (!VP_PERFECT){
+               //misprediction
+               if (PAY.buf[index].C_value.dw != VPU->vpq[PAY.buf[index].vp_vpq_idx].vp_val) {
+                  set_value_misprediction(PAY.buf[index].AL_index);
+                  REN->write(PAY.buf[index].C_phys_reg, PAY.buf[index].C_value.dw);
+               }
             }
-            //else correct prediction. no need to update PRF
+            //else correct prediction. no need to update PRF            
          } 
          //if no prediction available then set ready bit and wakeup the port
          else {
@@ -306,7 +313,7 @@ void pipeline_t::load_replay() {
          // FIX_ME #18a END
 
          //Write the executed value into VPQ
-         if (VPU && eligible(&PAY.buf[index]) && !VP_PERFECT){
+         if (VPU && PAY.buf[index].is_eligible && !VP_PERFECT){
             VPU->vpq_write_value(PAY.buf[index].vp_vpq_idx, PAY.buf[index].C_value.dw);
          }
       }

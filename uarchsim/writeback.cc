@@ -146,7 +146,7 @@ void pipeline_t::writeback(unsigned int lane_number) {
             // Rollback PAY to the point of the branch.
             PAY.rollback(index);
             if (VPU && !VP_PERFECT)
-               VPU->repair_instances(vpq_checkpoint_tail[PAY.buf[index].branch_ID]);
+               VPU->vpq_repair(PAY.buf[index].branch_ID);
          }
       }
 

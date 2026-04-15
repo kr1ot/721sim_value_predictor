@@ -205,8 +205,19 @@ void pipeline_t::dispatch() {
       //based on the value prediction
       if (PAY.buf[index].C_valid){
          //if value predicted with confidence then set the ready bit
-         if (PAY.buf[index].predicted && PAY.buf[index].vp_confident){
-            REN->write(PAY.buf[index].C_phys_reg,PAY.buf[index].vp_prediction);
+         if (use_vp(index)){
+            uint64_t pred_val;
+
+            //for perfect VP, get the value from functional simulator
+            if (VP_PERFECT){
+               db_t *actual = get_pipe()->peek(PAY.buf[index].db_index);
+               pred_val = actual->a_rdst[0].value;
+            }
+            else{
+               pred_val = VPU->vpq[PAY.buf[index].vp_vpq_idx].vp_val;
+            }
+
+            REN->write(PAY.buf[index].C_phys_reg,pred_val);
             REN->set_ready(PAY.buf[index].C_phys_reg);
          }
          //else clear 

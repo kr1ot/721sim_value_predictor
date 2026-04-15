@@ -82,10 +82,6 @@ void pipeline_t::retire(size_t &instret) {
          // FIX_ME #17b BEGIN
          REN->commit();
          // FIX_ME #17b END
-         //Train SVP
-         if (VPU && eligible(&PAY.buf[PAY.head]) && !VP_PERFECT) {
-            VPU->train(PAY.buf[PAY.head].vp_vpq_idx);
-         }
 
          // If the committed instruction is a load or store, signal the LSU to commit its oldest load or store, respectively.
          if (load || store) {
@@ -127,35 +123,44 @@ void pipeline_t::retire(size_t &instret) {
                //get the index of the instruction from the head
                unsigned int idx = PAY.head;
                //check if the instruction was ineligible
-               if (!eligible(&PAY.buf[idx])) {
+               if (!PAY.buf[idx].is_eligible) {
                   //increment count for ineligible for value prediction 
                   vpmeas_ineligible++;
                } 
                //eligible instructions
                else {
-                  
-                  //if the prediction was not available
-                  if (!PAY.buf[idx].predicted) {
-                     vpmeas_miss++;
-                  } 
-                  //when the value from functional simulator is available
-                  else {
-                     //check if the predicted value is correct
-                     bool correct = (PAY.buf[idx].vp_prediction == PAY.buf[idx].C_value.dw);
-                     
-                     //confident and correct value
-                     if (PAY.buf[idx].vp_confident && correct)
-                        vpmeas_conf_corr++;
-                     //confident and incorrect value
-                     else if (PAY.buf[idx].vp_confident && !correct)
-                        vpmeas_conf_incorr++;
-                     //not confident and correct
-                     else if (!PAY.buf[idx].vp_confident && correct)
-                        vpmeas_unconf_corr++;
-                     //not confident and incorrect
-                     else
-                        vpmeas_unconf_incorr++;
+                  if(VP_PERFECT){
+                     vpmeas_conf_corr++;
                   }
+                  else{
+                     //get the entry at the top of Payload buffer/AL
+                     vpq_entry_t &vpq_entry = VPU->vpq[PAY.buf[idx].vp_vpq_idx];
+                     //if the prediction was not available
+                     if (!vpq_entry.predicted) {
+                        vpmeas_miss++;
+                     }
+                     else{
+                        //check if the predicted value is correct
+                        bool correct = (vpq_entry.vp_val == PAY.buf[idx].C_value.dw);
+                        
+                        //confident and correct value
+                        if (vpq_entry.confident && correct)
+                           vpmeas_conf_corr++;
+                        //confident and incorrect value
+                        else if (vpq_entry.confident && !correct)
+                           vpmeas_conf_incorr++;
+                        //not confident and correct
+                        else if (vpq_entry.confident && correct)
+                           vpmeas_unconf_corr++;
+                        //not confident and incorrect
+                        else
+                           vpmeas_unconf_incorr++;
+                     }
+                  }
+               }
+            //Train SVP
+               if (PAY.buf[PAY.head].is_eligible && !VP_PERFECT) {
+                  VPU->train(PAY.buf[PAY.head].vp_vpq_idx);
                }
             }
 

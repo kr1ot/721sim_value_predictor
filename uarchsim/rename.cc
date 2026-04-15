@@ -78,12 +78,8 @@ void pipeline_t::rename2() {
 
       index = RENAME2[i].index;
 
-      //initialize all the instructions with value prediction flags
-      PAY.buf[index].predicted = false;
-      PAY.buf[index].vp_prediction = 0;
-      PAY.buf[index].vp_confident = false;
-
-
+      //check for value prediction eligibility of an instruction
+      PAY.buf[index].is_eligible = eligible(&PAY.buf[index]);
       // FIX_ME #1
       // Count the number of instructions in the rename bundle that need a checkpoint (most branches).
       // Count the number of instructions in the rename bundle that have a destination register.
@@ -103,7 +99,7 @@ void pipeline_t::rename2() {
       if (PAY.buf[index].C_valid) count_insn_has_dst += 1;
       // FIX_ME #1 END
 
-      if (VPU && eligible(&PAY.buf[index])) bundle_vp_eligible += 1;
+      if (PAY.buf[index].is_eligible) bundle_vp_eligible += 1;
    }
 
    // FIX_ME #2
@@ -192,54 +188,35 @@ void pipeline_t::rename2() {
       if (PAY.buf[index].checkpoint) {
          PAY.buf[index].branch_ID = REN->checkpoint();
          //checkpoint the VPQ tail for the branch
-         if (VPU && !VP_PERFECT) vpq_checkpoint_tail[PAY.buf[index].branch_ID] = VPU->vpq_tail;
+         if (VPU && !VP_PERFECT) VPU->vpq_checkpoint(PAY.buf[index].branch_ID);
       }
       // FIX_ME #5 END
 
       //check for the value prediction of the instructions
-      if(eligible(&PAY.buf[index])){
-         //for perfect value prediction
-         if (VP_PERFECT){
-            //check if the instruction exists in the functional simulator
-            //this will give the perfect value for value prediction
-            if(PAY.buf[index].good_instruction){
-               //get the actual value from the debug 
-               db_t *actual = get_pipe()->peek(PAY.buf[index].db_index);
+      if(PAY.buf[index].is_eligible){
 
-               //update the prediction flags
-               PAY.buf[index].predicted = true;
-               PAY.buf[index].vp_prediction = actual->a_rdst[0].value;
-               PAY.buf[index].vp_confident = true;
+         if(VPU) {
+            if (!VP_PERFECT){
+               //perform a perdiction
+               uint64_t pred_val = 0;
+               bool confident = false;
+
+               // For oracle confidence, pass actual value from checker
+               uint64_t actual_val = 0;
+               if (VPU->oracle_conf && PAY.buf[index].good_instruction) {
+                  db_t *actual   = get_pipe()->peek(PAY.buf[index].db_index);
+                  actual_val      = actual->a_rdst[0].value;
+               }
+
+               // Always allocate VPQ entry for ALL VP-eligible instructions
+               PAY.buf[index].vp_vpq_idx = VPU->vpq_alloc(PAY.buf[index].pc);
+
+               VPU->predict(PAY.buf[index].pc,
+                           PAY.buf[index].vp_vpq_idx,
+                           actual_val);
             }
-         }
-         else if(VPU) {
-            //real prediction
-            uint64_t pred_val = 0;
-            bool confident = false;
-            uint32_t vpq_tail_out = 0;
-
-            // For oracle confidence, pass actual value from checker
-            uint64_t actual_val = 0;
-            if (VPU->oracle_conf && PAY.buf[index].good_instruction) {
-               db_t *actual   = get_pipe()->peek(PAY.buf[index].db_index);
-               actual_val      = actual->a_rdst[0].value;
-            }
-
-            bool hit = VPU->predict(PAY.buf[index].pc,
-                                    pred_val,
-                                    confident,
-                                    vpq_tail_out,
-                                    actual_val);
-
-            PAY.buf[index].predicted     = hit;
-            PAY.buf[index].vp_confident  = hit && confident;
-            PAY.buf[index].vp_prediction = pred_val;
-
-            // Always allocate VPQ entry for ALL VP-eligible instructions
-            PAY.buf[index].vp_vpq_idx = VPU->vpq_alloc(PAY.buf[index].pc);
          }
       }
-      
    }
 
    //

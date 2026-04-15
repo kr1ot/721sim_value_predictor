@@ -132,11 +132,6 @@ void pipeline_t::resolve(unsigned int branch_ID, bool correct) {
       // Schedule Stage:
       IQ.squash(branch_ID);
 
-      //TODO: Need to check this logic for roll back
-      if (VPU && !VP_PERFECT){
-         VPU->repair_instances(vpq_checkpoint_tail[branch_ID]);
-      }
-
       for (i = 0; i < issue_width; i++) {
          // Register Read Stage:
          if (Execution_Lanes[i].rr.valid && BIT_IS_ONE(Execution_Lanes[i].rr.branch_mask, branch_ID)) {
