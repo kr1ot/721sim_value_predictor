@@ -428,14 +428,7 @@ pipeline_t::pipeline_t(
 
    //Initialize VPU
    if (VP_ENABLED){
-      // VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, VP_ORACLE_CONF);
-      uint32_t miss_pen = SVP_CONF_MAX / 4;   // e.g. 31/4 = 7
-      if (miss_pen == 0) miss_pen = 1;
-      VPU = new vpu_t(VPQ_SIZE,
-                     num_chkpts,
-                     SVP_CONF_MAX,       // conf_max
-                     miss_pen,            // conf_miss_pen
-                     VP_ORACLE_CONF);
+      VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, SVP_CONF_MAX,VP_ORACLE_CONF);
    }
    else{
       VPU = nullptr;

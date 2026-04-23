@@ -4,16 +4,25 @@
 #include <cinttypes>
 #include <cassert>
 #include <cstring>
-#include <map>
-#include <utility>
+#include <cmath>
 
 //////////////////////////////////////////////////////////////
-// CVP Prediction Table entry
+// VHT entry — indexed by PC, tag validation
+//////////////////////////////////////////////////////////////
+typedef struct {
+    bool     valid;
+    uint64_t tag;
+    uint64_t last_value;   // last committed value for this PC
+} vht_entry_t;
+
+//////////////////////////////////////////////////////////////
+// Prediction Table entry — indexed by hash(vht_idx, last_value)
+// No tag — aliasing handled by confidence counter
 //////////////////////////////////////////////////////////////
 typedef struct {
     uint64_t value;
     uint32_t conf;
-} cvp_pred_entry_t;
+} pt_entry_t;
 
 //////////////////////////////////////////////////////////////
 // VPQ Entry
@@ -21,26 +30,18 @@ typedef struct {
 typedef struct {
     uint64_t pc;
     bool     valid;
-
-    // Real computed value (set at execute)
     uint64_t value;
     bool     value_ready;
-
-    // Rename-time prediction (used for misprediction check at execute)
     uint64_t vp_val;
     bool     predicted;
     bool     confident;
-
-    // Forward-walk deposited context (used by next instance's backward walk)
     uint64_t fwd_val;
     bool     fwd_valid;
-
-    // Misc
     unsigned int flags;
 } vpq_entry_t;
 
 //////////////////////////////////////////////////////////////
-// VPU — CVP Order-1
+// VPU — Finite CVP Order-1
 //////////////////////////////////////////////////////////////
 class vpu_t {
 public:
@@ -48,21 +49,27 @@ public:
     // Config
     //-----------------------------
     uint32_t vpq_size;
-    uint32_t conf_max;         // confidence threshold for prediction
-    uint32_t conf_miss_pen;    // decrement on misprediction
+    uint32_t index_bits;       // VHT index bits → VHT has 2^index_bits entries
+    uint32_t tag_bits;         // VHT tag bits
+    uint32_t pt_index_bits;    // PT index bits = index_bits + 1 (2x VHT)
+    uint32_t conf_max;
+    uint32_t conf_miss_pen;
     bool     oracle_conf;
 
     //-----------------------------
-    // CVP tables (infinite — std::map)
+    // VHT — finite, tag-validated
     //-----------------------------
-    // VHT: PC → last committed value
-    std::map<uint64_t, uint64_t> vht;
-
-    // Prediction table: (PC, last_value) → {predicted_next_value, confidence}
-    std::map<std::pair<uint64_t, uint64_t>, cvp_pred_entry_t> pred_table;
+    vht_entry_t *vht;
+    uint32_t     vht_num_entries;
 
     //-----------------------------
-    // VPQ (circular buffer with phase bits)
+    // Prediction Table — 2x VHT, no tag
+    //-----------------------------
+    pt_entry_t  *pt;
+    uint32_t     pt_num_entries;
+
+    //-----------------------------
+    // VPQ (circular buffer)
     //-----------------------------
     vpq_entry_t *vpq;
     uint32_t     vpq_head;
@@ -82,13 +89,15 @@ public:
     //-----------------------------
     vpu_t(uint32_t vpq_size,
           uint32_t num_chkpts,
+          uint32_t index_bits,
+          uint32_t tag_bits,
           uint32_t conf_max,
           uint32_t conf_miss_pen,
           bool     oracle_conf);
     ~vpu_t();
 
     //-----------------------------
-    // VPQ helpers (unchanged)
+    // VPQ helpers
     //-----------------------------
     bool     full()  { return (vpq_head == vpq_tail) &&
                               (vpq_head_phase != vpq_tail_phase); }
@@ -102,6 +111,13 @@ public:
     }
 
     //-----------------------------
+    // VHT / PT index and tag
+    //-----------------------------
+    uint32_t vht_get_index(uint64_t pc);
+    uint64_t vht_get_tag(uint64_t pc);
+    uint32_t pt_get_index(uint32_t vht_idx, uint64_t last_value);
+
+    //-----------------------------
     // VPQ operations
     //-----------------------------
     uint32_t vpq_alloc(uint64_t pc);
@@ -112,15 +128,8 @@ public:
     //-----------------------------
     // Core prediction / training
     //-----------------------------
-    // predict(): called at rename — backward walk to find context, look up pred table
     void predict(uint64_t pc, uint32_t vpq_idx, uint64_t actual_value);
-
-    // forward_walk(): called at execute after value_ready set
-    //   - starts from (vpq_idx+1)
-    //   - deposits fwd_val into matching-PC entries while confidence holds
     void forward_walk(uint32_t vpq_idx);
-
-    // train(): called at retirement — update VHT and prediction table
     void train(uint32_t vpq_idx);
 
     //-----------------------------
@@ -130,15 +139,28 @@ public:
     void full_flush();
 
     //-----------------------------
-    // Storage cost — prediction table only (VHT excluded per spec)
+    // Storage cost
     //-----------------------------
-    uint64_t pred_table_entries() { return pred_table.size(); }
-    // Cost is infinite in this implementation — for reporting only
+    uint32_t get_conf_bits() {
+        return (uint32_t)ceil(log2((double)(conf_max + 1)));
+    }
+    uint32_t get_vht_bits_per_entry() {
+        return 1 + tag_bits + 64;  // valid + tag + value
+    }
+    uint32_t get_pt_bits_per_entry() {
+        return 64 + get_conf_bits();  // value + conf
+    }
+    uint64_t get_total_bits() {
+        return (uint64_t)get_vht_bits_per_entry() * vht_num_entries +
+               (uint64_t)get_pt_bits_per_entry()  * pt_num_entries;
+    }
+    uint64_t storage_bytes() {
+        return (get_total_bits() + 7) / 8;
+    }
 
 private:
-    // Helper: backward walk from just-before tail, find most recent prior
-    // entry for same PC. Returns context value and whether valid context found.
-    bool backward_walk_find_context(uint64_t pc, uint32_t new_vpq_idx,uint64_t &ctx);
+    bool backward_walk_find_context(uint64_t pc, uint32_t new_vpq_idx,
+                                     uint64_t &ctx);
 };
 
 #endif // VPU_H
