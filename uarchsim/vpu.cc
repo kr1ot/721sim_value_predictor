@@ -1,263 +1,340 @@
 #include "vpu.h"
-#include <cassert>
+#include <cstring>
+#include <cstdio>
 
-vpu_t::vpu_t(uint32_t vpq_size,
-             uint32_t num_chkpts,
-             uint32_t index_bits,
-             uint32_t tag_bits,
-             uint64_t conf_max,
-             bool     oracle_conf)
-{
-    this->vpq_size        = vpq_size;
-    this->index_bits      = index_bits;
-    this->tag_bits        = tag_bits;
-    this->conf_max        = conf_max;
-    this->oracle_conf     = oracle_conf;
-    this->num_chkpts      = num_chkpts;
+//============================================================
+// Constructor / Destructor
+//============================================================
+vpu_t::vpu_t(uint32_t vpq_size, uint32_t num_chkpts,
+             uint32_t conf_max, uint32_t conf_miss_pen,
+             bool oracle_conf) {
 
-    svp_num_entries = (1u << index_bits);
+    this->vpq_size      = vpq_size;
+    this->num_chkpts    = num_chkpts;
+    this->conf_max      = conf_max;
+    this->conf_miss_pen = conf_miss_pen;
+    this->oracle_conf   = oracle_conf;
 
-    //vpq circular buffer
-    vpq_head        = 0;
-    vpq_tail        = 0;
+    // VPQ init
+    vpq_head       = 0;
+    vpq_tail       = 0;
     vpq_head_phase = false;
     vpq_tail_phase = false;
 
-    svp = new svp_entry_t[svp_num_entries];
-    //invalidate all the entries of the SVP table
-    //they will updated when adding an entry in the table
-    for (uint64_t i = 0; i < svp_num_entries; i++){
-        svp[i].tag = 0;
-        svp[i].conf = 0;
-        svp[i].retired_value= 0;
-        svp[i].stride = 0;
-        svp[i].instance = 0;
-    }
-
     vpq = new vpq_entry_t[vpq_size];
-    //same for VPQ
-    for (uint64_t i = 0; i < vpq_size; i++){
-        vpq[i].valid = false; //TODO: check if required
-
-        vpq[i].predicted = false;
-        vpq[i].confident = false;
-        vpq[i].pc = 0;
-        vpq[i].value = 0;
-        vpq[i].vp_val = 0;
+    for (uint32_t i = 0; i < vpq_size; i++) {
+        vpq[i].pc          = 0;
+        vpq[i].valid       = false;
+        vpq[i].value       = 0;
+        vpq[i].value_ready = false;
+        vpq[i].vp_val      = 0;
+        vpq[i].predicted   = false;
+        vpq[i].confident   = false;
+        vpq[i].fwd_val     = 0;
+        vpq[i].fwd_valid   = false;
+        vpq[i].flags       = 0;
     }
 
-    vpq_checkpoint_tail = new uint32_t[num_chkpts];
+    // Checkpoint arrays
+    vpq_checkpoint_tail       = new uint32_t[num_chkpts];
     vpq_checkpoint_tail_phase = new bool[num_chkpts];
-    for (uint32_t i = 0; i < num_chkpts;i++){
-        vpq_checkpoint_tail[i] = 0;
-        vpq_checkpoint_tail_phase[i] = false;
-    }
+    memset(vpq_checkpoint_tail,       0, sizeof(uint32_t) * num_chkpts);
+    memset(vpq_checkpoint_tail_phase, 0, sizeof(bool)     * num_chkpts);
 
+    // vht and pred_table auto-initialize as empty maps
 }
 
 vpu_t::~vpu_t() {
-    delete[] svp;
     delete[] vpq;
     delete[] vpq_checkpoint_tail;
     delete[] vpq_checkpoint_tail_phase;
 }
 
-//index and tag related functions
-// PC layout :
-//   bits [1:0]               = 00, discard (RISC-V aligned)
-//   bits [index_bits+1 : 2]  = PCindex
-//   bits [63 : index_bits+2] = PCtag 
-
-//get the index from PC
-uint64_t vpu_t::get_index(uint64_t pc) {
-    uint64_t mask = (1ULL << index_bits) - 1;
-    return (pc >> 2) & mask;
-}
-
-//get the tag from the PC
-uint64_t vpu_t::get_tag(uint64_t pc) {
-    if (tag_bits == 0) return 0;
-    uint64_t mask = (1ULL << tag_bits) - 1;
-    return (pc >> (2 + index_bits)) & mask;
-}
-
-uint32_t vpu_t::vpq_free_count() {
-    if (vpq_tail_phase == vpq_head_phase)
-        return vpq_size - (vpq_tail - vpq_head);
-    else
-        return vpq_head - vpq_tail;
-}
-
+//============================================================
+// VPQ operations
+//============================================================
 uint32_t vpu_t::vpq_alloc(uint64_t pc) {
-
-    //get the tail index where new entry is to be allocated in VPQ
-    uint32_t idx = vpq_tail;
-
-    vpq[idx].pc = pc;
-    vpq[idx].value = 0;
-    //TODO: Check if required
-    vpq[idx].valid = true;
-
-    //speculative
-    vpq[idx].vp_val = 0;
-    vpq[idx].predicted = false;
-    vpq[idx].confident = false;
+    assert(!full());
+    uint32_t idx         = vpq_tail;
+    vpq[idx].pc          = pc;
+    vpq[idx].valid       = true;
+    vpq[idx].value       = 0;
+    vpq[idx].value_ready = false;
+    vpq[idx].vp_val      = 0;
+    vpq[idx].predicted   = false;
+    vpq[idx].confident   = false;
+    vpq[idx].fwd_val     = 0;
+    vpq[idx].fwd_valid   = false;
+    vpq[idx].flags       = 0;
 
     vpq_tail++;
     if (vpq_tail == vpq_size) {
-        vpq_tail = 0;
+        vpq_tail       = 0;
         vpq_tail_phase = !vpq_tail_phase;
     }
-    //return the index where entry was allocated
     return idx;
 }
 
-//write value to the VPQ index
 void vpu_t::vpq_write_value(uint32_t vpq_idx, uint64_t value) {
-    //only write if the entry was valid
-    assert(vpq[vpq_idx].valid);   //only used as debug
-
+    assert(vpq[vpq_idx].valid);
     vpq[vpq_idx].value       = value;
+    vpq[vpq_idx].value_ready = true;
 }
 
 void vpu_t::vpq_checkpoint(uint32_t branch_ID) {
-    vpq_checkpoint_tail[branch_ID] = vpq_tail;
+    assert(branch_ID < num_chkpts);
+    vpq_checkpoint_tail[branch_ID]       = vpq_tail;
     vpq_checkpoint_tail_phase[branch_ID] = vpq_tail_phase;
 }
 
 void vpu_t::vpq_repair(uint32_t branch_ID) {
+    assert(branch_ID < num_chkpts);
     repair_instances(vpq_checkpoint_tail[branch_ID],
                      vpq_checkpoint_tail_phase[branch_ID]);
 }
 
-/////////////////////////////////
-// Prediction from VPU
-/////////////////////////////////
-void vpu_t::predict(uint64_t  pc,
-                    uint32_t vpq_idx,
-                    uint64_t  actual_value)
-{
-    uint64_t pc_index = get_index(pc);
-    uint64_t pc_tag = get_tag(pc);
+//============================================================
+// Backward walk helper
+// From just-before tail walking toward head, find most recent prior
+// VPQ entry for this PC. Use actual value if executed, else fwd_val if valid.
+//============================================================
+bool vpu_t::backward_walk_find_context(uint64_t pc, uint32_t new_vpq_idx,uint64_t &ctx) {
+    // Number of entries in-flight (excluding the new entry being allocated)
+    uint32_t entries_in_flight;
+    if (vpq_tail_phase == vpq_head_phase)
+        entries_in_flight = vpq_tail - vpq_head;
+    else
+        entries_in_flight = vpq_size - vpq_head + vpq_tail;
 
-    //index into SVP table using pc index
-    svp_entry_t &svp_entry = svp[pc_index];
+    // Walk backward from tail-1 down to head
+    for (uint32_t n = 0; n < entries_in_flight; n++) {
+        uint32_t pos = (vpq_tail + vpq_size - 1 - n) % vpq_size;
 
-    // hit = entry valid AND tag matches (or no tags used)
-    bool hit = svp_entry.tag == pc_tag;
+        if (!vpq[pos].valid) continue;
+        if (pos == new_vpq_idx)     continue;   // skip new entry
+        if (vpq[pos].pc != pc) continue;
 
-    //if SVP entry missed,
-    if (!hit) {
-        vpq[vpq_idx].confident = false;
-        vpq[vpq_idx].predicted = false;
-        vpq[vpq_idx].vp_val = 0;
-        return;
-    }
-    //if SVP entry hit
-
-    // speculatively increment instance
-    svp_entry.instance++;
-
-    // prediction = retired_value + instance * stride
-    uint64_t pred_value = (uint64_t)((int64_t)svp_entry.retired_value + svp_entry.instance * svp_entry.stride);
-
-    bool confident;
-    // decide the confidence
-    if (oracle_conf) {
-        // oracle mode: confident only if prediction matches actual checker value
-        confident = (pred_value == actual_value);
-    } 
-    else {
-        // real mode: confident if conf == conf_max
-        confident = (svp_entry.conf == conf_max);
+        // Found most recent prior instance of this PC
+        // Priority: actual value > forward-walked predicted value
+        if (vpq[pos].value_ready) {
+            ctx = vpq[pos].value;
+            return true;
+        }
+        if (vpq[pos].fwd_valid) {
+            ctx = vpq[pos].fwd_val;
+            return true;
+        }
+        // Prior instance has no usable context — do not propagate further
+        return false;
     }
 
-    vpq[vpq_idx].confident = confident;
-    vpq[vpq_idx].predicted = true;
-    vpq[vpq_idx].vp_val = pred_value;
+    // No prior in-flight instance — use committed VHT
+    auto it = vht.find(pc);
+    if (it != vht.end()) {
+        ctx = it->second;
+        return true;
+    }
+
+    return false;
 }
 
-///////////////////////////////////
-// Training of VPU
-///////////////////////////////////
+//============================================================
+// predict() — called at rename
+// Backward walk to find context, look up prediction table
+//============================================================
+void vpu_t::predict(uint64_t pc, uint32_t vpq_idx,
+                    uint64_t actual_value) {
 
+    // Step 1: find context via backward walk
+    uint64_t ctx;
+    bool     have_ctx = backward_walk_find_context(pc, vpq_idx,ctx);
+
+    //  fprintf(stderr, "predict: PC=0x%lx have_ctx=%d ctx=%lu "
+    //                 "table_size=%lu\n",
+    //         pc, have_ctx, ctx, pred_table.size());
+
+    if (!have_ctx) {
+        // No context available — cannot predict
+        vpq[vpq_idx].predicted = false;
+        vpq[vpq_idx].confident = false;
+        vpq[vpq_idx].vp_val    = 0;
+        return;
+    }
+
+    // Step 2: look up prediction table
+    auto key = std::make_pair(pc, ctx);
+    auto it  = pred_table.find(key);
+    // fprintf(stderr, "predict: key lookup hit=%d\n",
+    //         it != pred_table.end());
+    if (it == pred_table.end()) {
+        // No prediction table entry for this context
+        vpq[vpq_idx].predicted = false;
+        vpq[vpq_idx].confident = false;
+        vpq[vpq_idx].vp_val    = 0;
+        return;
+    }
+
+    // Step 3: check confidence
+    bool confident;
+    if (oracle_conf)
+        confident = (it->second.value == actual_value);
+    else
+        confident = (it->second.conf >= conf_max);
+
+    vpq[vpq_idx].predicted = true;
+    vpq[vpq_idx].vp_val    = it->second.value;
+    vpq[vpq_idx].confident = confident;
+}
+
+//============================================================
+// forward_walk() — called at execute after vpq_write_value()
+// Start from (vpq_idx+1), propagate predictions to matching-PC entries
+// Stop conditions:
+//   1. Reached tail
+//   2. Found another entry with value_ready=true (its own execute will propagate)
+//   3. Prediction table miss or low confidence → chain broken
+//============================================================
+void vpu_t::forward_walk(uint32_t vpq_idx) {
+    if (!vpq[vpq_idx].valid) return;
+    if (!vpq[vpq_idx].value_ready) return;   // must have a real value to seed
+
+    uint64_t pc          = vpq[vpq_idx].pc;
+    uint64_t current_ctx = vpq[vpq_idx].value;
+
+    // Walk forward from vpq_idx+1 until tail
+    uint32_t pos       = (vpq_idx + 1) % vpq_size;
+    bool     pos_phase = (pos == 0 && vpq_idx == vpq_size - 1)
+                         ? !vpq_head_phase    // approximation; see note below
+                         : false;
+
+    // Compute stopping condition using position vs tail
+    // Simpler: walk at most vpq_size steps, stop when pos == vpq_tail
+    uint32_t steps = 0;
+    uint32_t p     = (vpq_idx + 1) % vpq_size;
+
+    // Handle phase: if vpq_idx+1 wrapped to 0, we are in tail_phase (same as tail)
+    // Actually simpler — just check p != vpq_tail OR phase mismatch; bounded by vpq_size
+    while (steps < vpq_size) {
+        // Stop if reached tail
+        // To handle wrap correctly, check if we have walked as many entries as
+        // exist between vpq_idx+1 and vpq_tail
+        if (p == vpq_tail) {
+            // Need to also check phase — but for forward walk from an entry
+            // that was already allocated (valid), p reaching tail means we
+            // walked past all in-flight entries after vpq_idx
+            break;
+        }
+
+        if (!vpq[p].valid) {
+            // Should not happen in a well-formed VPQ, but be defensive
+            p = (p + 1) % vpq_size;
+            steps++;
+            continue;
+        }
+
+        if (vpq[p].pc == pc) {
+            // Matching PC found
+
+            // Stop if this instance already has real value — its own
+            // forward walk will propagate from there
+            if (vpq[p].value_ready)
+                break;
+
+            // Look up prediction table with current context
+            auto key = std::make_pair(pc, current_ctx);
+            auto it  = pred_table.find(key);
+            if (it == pred_table.end()) {
+                break;   // no entry — chain broken
+            }
+
+            uint32_t fwd_threshold = conf_max / 2;
+            if (fwd_threshold == 0) fwd_threshold = 1;  // guard against conf_max=1 edge case
+
+            if (it->second.conf < fwd_threshold) {
+                break;
+            }
+
+            // Deposit prediction
+            vpq[p].fwd_val   = it->second.value;
+            vpq[p].fwd_valid = true;
+
+            // Update context for next iteration
+            current_ctx = it->second.value;
+        }
+
+        p = (p + 1) % vpq_size;
+        steps++;
+    }
+}
+
+//============================================================
+// train() — called at retirement
+// Update prediction table using (PC, last_value_from_VHT) → committed_value
+// Update VHT[PC] = committed_value
+//============================================================
 void vpu_t::train(uint32_t vpq_idx) {
-    //check if the index is same as the head of the vpq
     assert(vpq_idx == vpq_head);
-    //whether the entry is valid and has the value ready by the moment
-    //this function was called
     assert(vpq[vpq_idx].valid);
+    assert(vpq[vpq_idx].value_ready);
 
-    //get the necessary variables
-    uint64_t pc = vpq[vpq_idx].pc;
+    uint64_t pc    = vpq[vpq_idx].pc;
     uint64_t value = vpq[vpq_idx].value;
-    uint64_t pc_index = get_index(pc);
-    uint64_t pc_tag = get_tag(pc);
-    svp_entry_t &svp_entry = svp[pc_index];
 
-    //check if the entry hit in SVP
-    bool hit = (svp_entry.tag == pc_tag);
+    // Step 1: if VHT has a prior value, update prediction table
+    auto vht_it = vht.find(pc);
+    if (vht_it != vht.end()) {
+        uint64_t last_value = vht_it->second;
+        auto key    = std::make_pair(pc, last_value);
+        auto tbl_it = pred_table.find(key);
 
-    //if hit then train the svp
-    if (hit) {
-        // ======== Train  ==========
-        //get the new stride
-        int64_t new_stride = (int64_t)value - (int64_t)svp_entry.retired_value;
-        //if the stride matches,
-        if (new_stride == svp_entry.stride) {
-            //increase the confidence
-            if (svp_entry.conf < conf_max) svp_entry.conf++;   // saturate at conf_max
-        } 
-        //if stride does not match
-        else {
-            svp_entry.stride = new_stride;
-            svp_entry.conf = 0;
+        //  fprintf(stderr, "train: PC=0x%lx last_val=%lu new_val=%lu "
+        //                 "table_size=%lu ",
+        //         pc, last_value, value, pred_table.size());
+
+        if (tbl_it == pred_table.end()) {
+            // Allocate new entry
+            cvp_pred_entry_t entry;
+            entry.value      = value;
+            entry.conf       = 0;
+            pred_table[key]  = entry;
+        } else {
+            if (tbl_it->second.value == value) {
+                // Correct — increment confidence
+                if (tbl_it->second.conf < conf_max)
+                    tbl_it->second.conf++;
+            } else {
+                // Wrong — apply miss penalty and update value
+                if (tbl_it->second.conf >= conf_miss_pen)
+                    tbl_it->second.conf -= conf_miss_pen;
+                else
+                    tbl_it->second.conf = 0;
+                tbl_it->second.value = value;
+            }
         }
-        svp_entry.retired_value = value;
-        svp_entry.instance--;   // one in-flight instance retired
-
     }
 
-    //if miss in SVP, then allocate a new entry/replace
-    else {
-        // Count in-flight instances by walking VPQ head+1 to tail
-        int64_t in_flight = 0;
+    // Step 2: update VHT (always)
+    vht[pc] = value;
 
-        uint32_t i = (vpq_head + 1) % vpq_size;
-        
-        // Use free count to determine how many to walk
-        uint32_t to_walk = (vpq_free_count() == 0) ? (vpq_size - 1) :
-                           (vpq_size - vpq_free_count() - 1);
-
-        for (uint32_t n = 0; n < to_walk; n++) {
-            if (vpq[i].pc == pc)
-                in_flight++;
-            i = (i + 1) % vpq_size;
-        }
-        svp_entry.tag           = pc_tag;
-        svp_entry.conf          = 0;
-        svp_entry.retired_value = value;
-        svp_entry.stride        = (int64_t)value;
-        svp_entry.instance      = in_flight;
-    }
-
-    // Free VPQ head
-    vpq[vpq_idx].valid = false;
+    // Step 3: free VPQ head
+    vpq[vpq_idx].valid       = false;
+    vpq[vpq_idx].value_ready = false;
     vpq_head++;
-    if(vpq_head == vpq_size){
-        vpq_head = 0;
+    if (vpq_head == vpq_size) {
+        vpq_head       = 0;
         vpq_head_phase = !vpq_head_phase;
     }
 }
 
-//repair after a squash
+//============================================================
+// repair_instances() — branch mispredict rollback
+// Walk tail backward, freeing entries. No special CVP state to restore
+// because VHT and prediction table are non-speculative.
+//============================================================
 void vpu_t::repair_instances(uint32_t rollback_tail, bool rollback_tail_phase) {
     uint32_t entries_to_free;
-    //get the entries to free value based on the tail phase
-    //tail has not rolled over
     if (vpq_tail_phase == rollback_tail_phase)
         entries_to_free = vpq_tail - rollback_tail;
-    //tail has rolled over
     else
         entries_to_free = vpq_size - rollback_tail + vpq_tail;
 
@@ -265,27 +342,27 @@ void vpu_t::repair_instances(uint32_t rollback_tail, bool rollback_tail_phase) {
         if (vpq_tail == 0) {
             vpq_tail       = vpq_size - 1;
             vpq_tail_phase = !vpq_tail_phase;
-        } 
-        else {
+        } else {
             vpq_tail--;
         }
 
-        uint64_t pc_index = get_index(vpq[vpq_tail].pc);
-        uint64_t pc_tag   = get_tag(vpq[vpq_tail].pc);
-        svp_entry_t &svp_entry = svp[pc_index];
-        bool hit = svp_entry.tag == pc_tag;
-
-        if (hit) svp_entry.instance--;
-        vpq[vpq_tail].valid       = false;
+        if (vpq[vpq_tail].valid) {
+            vpq[vpq_tail].valid       = false;
+            vpq[vpq_tail].value_ready = false;
+            vpq[vpq_tail].fwd_valid   = false;
+        }
     }
-    //to be sure I reached the right point
+
     assert(vpq_tail       == rollback_tail);
     assert(vpq_tail_phase == rollback_tail_phase);
 }
 
+//============================================================
+// full_flush() — complete squash (value misprediction or exception)
+// Empty the entire VPQ. VHT and prediction table survive.
+//============================================================
 void vpu_t::full_flush() {
     uint32_t entries_to_free;
-
     if (vpq_tail_phase == vpq_head_phase)
         entries_to_free = vpq_tail - vpq_head;
     else
@@ -293,17 +370,14 @@ void vpu_t::full_flush() {
 
     uint32_t i = vpq_head;
     for (uint32_t n = 0; n < entries_to_free; n++) {
-        uint64_t pc_index = get_index(vpq[i].pc);
-        uint64_t pc_tag   = get_tag(vpq[i].pc);
-
-        svp_entry_t &svp_entry = svp[pc_index];
-        bool hit = svp_entry.tag == pc_tag;
-
-        if (hit) svp_entry.instance--;
-
-        vpq[i].valid = false;
+        if (vpq[i].valid) {
+            vpq[i].valid       = false;
+            vpq[i].value_ready = false;
+            vpq[i].fwd_valid   = false;
+        }
         i = (i + 1) % vpq_size;
     }
+
     vpq_tail       = vpq_head;
     vpq_tail_phase = vpq_head_phase;
 }

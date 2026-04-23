@@ -98,6 +98,7 @@ void pipeline_t::execute(unsigned int lane_number) {
                //Write the executed value into VPQ
                if (VPU && PAY.buf[index].is_eligible && !VP_PERFECT){
                   VPU->vpq_write_value(PAY.buf[index].vp_vpq_idx, PAY.buf[index].C_value.dw);
+                  VPU->forward_walk(PAY.buf[index].vp_vpq_idx); //Added for forward walk
                }
             }
             // FIX_ME #13 END
@@ -174,6 +175,7 @@ void pipeline_t::execute(unsigned int lane_number) {
             //Write the executed value into VPQ
             if (VPU && PAY.buf[index].is_eligible && !VP_PERFECT){
                VPU->vpq_write_value(PAY.buf[index].vp_vpq_idx, PAY.buf[index].C_value.dw);
+               VPU->forward_walk(PAY.buf[index].vp_vpq_idx);
             }
          }
          // FIX_ME #14 END
@@ -315,6 +317,7 @@ void pipeline_t::load_replay() {
          //Write the executed value into VPQ
          if (VPU && PAY.buf[index].is_eligible && !VP_PERFECT){
             VPU->vpq_write_value(PAY.buf[index].vp_vpq_idx, PAY.buf[index].C_value.dw);
+            VPU->forward_walk(PAY.buf[index].vp_vpq_idx);
          }
       }
 

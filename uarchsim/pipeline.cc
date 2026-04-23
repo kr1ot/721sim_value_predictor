@@ -428,7 +428,14 @@ pipeline_t::pipeline_t(
 
    //Initialize VPU
    if (VP_ENABLED){
-      VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, VP_ORACLE_CONF);
+      // VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, VP_ORACLE_CONF);
+      uint32_t miss_pen = SVP_CONF_MAX / 4;   // e.g. 31/4 = 7
+      if (miss_pen == 0) miss_pen = 1;
+      VPU = new vpu_t(VPQ_SIZE,
+                     num_chkpts,
+                     SVP_CONF_MAX,       // conf_max
+                     miss_pen,            // conf_miss_pen
+                     VP_ORACLE_CONF);
    }
    else{
       VPU = nullptr;
@@ -455,19 +462,19 @@ pipeline_t::pipeline_t(
     fprintf(stats_log, "   confmax         = %u\n", SVP_CONF_MAX);
     fprintf(stats_log, "\n");
 
-    fprintf(stats_log, "COST ACCOUNTING\n");
-    fprintf(stats_log, "   One SVP entry:\n");
-    fprintf(stats_log, "      tag           : %2u bits  // num_tag_bits\n",SVP_TAG_BITS);
-    fprintf(stats_log, "      conf          : %2u bits  // formula: (uint64_t)ceil(log2((double)(confmax+1)))\n",VPU->get_conf_bits());
-    fprintf(stats_log, "      retired_value :  64 bits  // RISCV64 integer size.\n");
-    fprintf(stats_log, "      stride        :  64 bits  // RISCV64 integer size."
-            " Competition opportunity: truncate stride to far fewer bits"
-            " based on stride distribution of stride-predictable instructions.\n");
-    fprintf(stats_log, "      instance ctr  : %2u bits  // formula: (uint64_t)ceil(log2((double)VPQsize))\n",VPU->get_instance_bits());
-    fprintf(stats_log, "      -------------------------\n");
-    fprintf(stats_log, "      bits/SVP entry: %u bits\n", VPU->get_bits_per_entry());
-    fprintf(stats_log, "   Total storage cost (bits) = (%u SVP entries x %u bits/SVP entry) = %lu bits\n",VPU->svp_num_entries, VPU->get_bits_per_entry(), VPU->get_total_bits());
-    fprintf(stats_log, "   Total storage cost (bytes) = %.2f B (%.2f KB)\n",(double)VPU->svp_storage_bytes(), (double)VPU->svp_storage_bytes() / 1024.0);
+   //  fprintf(stats_log, "COST ACCOUNTING\n");
+   //  fprintf(stats_log, "   One SVP entry:\n");
+   //  fprintf(stats_log, "      tag           : %2u bits  // num_tag_bits\n",SVP_TAG_BITS);
+   //  fprintf(stats_log, "      conf          : %2u bits  // formula: (uint64_t)ceil(log2((double)(confmax+1)))\n",VPU->get_conf_bits());
+   //  fprintf(stats_log, "      retired_value :  64 bits  // RISCV64 integer size.\n");
+   //  fprintf(stats_log, "      stride        :  64 bits  // RISCV64 integer size."
+   //          " Competition opportunity: truncate stride to far fewer bits"
+   //          " based on stride distribution of stride-predictable instructions.\n");
+   //  fprintf(stats_log, "      instance ctr  : %2u bits  // formula: (uint64_t)ceil(log2((double)VPQsize))\n",VPU->get_instance_bits());
+   //  fprintf(stats_log, "      -------------------------\n");
+   //  fprintf(stats_log, "      bits/SVP entry: %u bits\n", VPU->get_bits_per_entry());
+   //  fprintf(stats_log, "   Total storage cost (bits) = (%u SVP entries x %u bits/SVP entry) = %lu bits\n",VPU->svp_num_entries, VPU->get_bits_per_entry(), VPU->get_total_bits());
+   //  fprintf(stats_log, "   Total storage cost (bytes) = %.2f B (%.2f KB)\n",(double)VPU->svp_storage_bytes(), (double)VPU->svp_storage_bytes() / 1024.0);
 }
 
    fprintf(stats_log, "\n=== INTERNAL SIMULATOR STRUCTURES ===============================================\n\n");
@@ -512,6 +519,19 @@ bool pipeline_t::use_vp(unsigned int index){
       return VPU->vpq[PAY.buf[index].vp_vpq_idx].confident;
    
    return false;
+}
+
+bool pipeline_t::was_injected(unsigned int index) {
+    if (!PAY.buf[index].is_eligible) return false;
+
+    if (VP_PERFECT)
+        return PAY.buf[index].good_instruction;
+
+    if (VPU) {
+        uint32_t idx = PAY.buf[index].vp_vpq_idx;
+        return VPU->vpq[idx].confident;
+    }
+    return false;
 }
 
 

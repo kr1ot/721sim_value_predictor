@@ -369,6 +369,7 @@ private:
    
    //check if the vp_prediction is to be used or not
    bool use_vp(unsigned int index);
+   bool was_injected(unsigned int index);
    //////////////////////
    // PRIVATE FUNCTIONS
    //////////////////////
