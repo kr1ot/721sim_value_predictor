@@ -428,7 +428,7 @@ pipeline_t::pipeline_t(
 
    //Initialize VPU
    if (VP_ENABLED){
-      VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, SVP_CONF_MAX,VP_ORACLE_CONF);
+      VPU = new vpu_t(VPQ_SIZE, num_chkpts, SVP_INDEX_BITS, SVP_TAG_BITS, SVP_CONF_MAX, SVP_CONF_MAX,VP_ORACLE_CONF,16);
    }
    else{
       VPU = nullptr;

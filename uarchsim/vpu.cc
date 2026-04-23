@@ -7,7 +7,8 @@
 vpu_t::vpu_t(uint32_t vpq_size, uint32_t num_chkpts,
              uint32_t index_bits, uint32_t tag_bits,
              uint32_t conf_max, uint32_t conf_miss_pen,
-             bool oracle_conf) {
+             bool oracle_conf,
+      uint32_t bhr_length) {
 
     this->vpq_size      = vpq_size;
     this->num_chkpts    = num_chkpts;
@@ -17,6 +18,12 @@ vpu_t::vpu_t(uint32_t vpq_size, uint32_t num_chkpts,
     this->conf_max      = conf_max;
     this->conf_miss_pen = conf_miss_pen;
     this->oracle_conf   = oracle_conf;
+
+
+    this->bhr_length = bhr_length;
+    this->bhr_mask   = (bhr_length == 0) ? 0 :
+                    ((1ULL << bhr_length) - 1);
+    this->commit_bhr = 0;
 
     svp_num_entries      = (1u << index_bits);
     vht_num_entries      = (1u << index_bits);
@@ -109,6 +116,11 @@ vpu_t::~vpu_t() {
     delete[] vpq_checkpoint_tail_phase;
 }
 
+void vpu_t::update_commit_bhr(bool taken) {
+    if (bhr_length == 0) return;
+    commit_bhr = ((commit_bhr << 1) | (taken ? 1ULL : 0ULL)) & bhr_mask;
+}
+
 //============================================================
 // Index / tag helpers
 //============================================================
@@ -116,6 +128,14 @@ uint32_t vpu_t::get_index(uint64_t pc) {
     uint64_t mask = (1ULL << index_bits) - 1;
     return (uint32_t)((pc >> 2) & mask);
 }
+
+// BHR-mixed index — used by VHT only
+uint32_t vpu_t::get_mediator_index(uint64_t pc) {
+    uint64_t pc_idx  = (pc >> 2) & ((1ULL << index_bits) - 1);
+    uint64_t bhr_idx = commit_bhr & ((1ULL << index_bits) - 1);
+    return (uint32_t)(pc_idx ^ bhr_idx);
+}
+
 
 uint64_t vpu_t::get_tag(uint64_t pc) {
     if (tag_bits == 0) return 0;
@@ -297,7 +317,8 @@ void vpu_t::predict(uint64_t pc, uint32_t vpq_idx, uint64_t actual_value) {
     vpq[vpq_idx].cvp_conf = cvp_conf;
 
     // Consult mediator
-    uint32_t med_idx = get_index(pc);
+    // uint32_t med_idx = get_index(pc);
+    uint32_t med_idx = get_mediator_index(pc);
     uint8_t  med_val = mediator[med_idx];
     bool     prefer_svp = (med_val >= 2);
 
@@ -454,7 +475,8 @@ void vpu_t::cvp_train(uint64_t pc, uint64_t value) {
 // Mediator update
 //============================================================
 void vpu_t::mediator_update(uint64_t pc, bool svp_correct, bool cvp_correct) {
-    uint32_t idx = get_index(pc);
+    // uint32_t idx = get_index(pc);
+    uint32_t idx = get_mediator_index(pc);
     uint8_t  &c  = mediator[idx];
 
     // Symmetric rule:

@@ -81,6 +81,11 @@ void pipeline_t::retire(size_t &instret) {
 
          // FIX_ME #17b BEGIN
          REN->commit();
+         if (VPU && !VP_PERFECT && PAY.buf[PAY.head].branch) {
+         bool actual_taken = (PAY.buf[PAY.head].c_next_pc !=
+                              INCREMENT_PC(PAY.buf[PAY.head].pc));
+         VPU->update_commit_bhr(actual_taken);
+         }
          // FIX_ME #17b END
 
          // If the committed instruction is a load or store, signal the LSU to commit its oldest load or store, respectively.

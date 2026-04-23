@@ -122,6 +122,18 @@ public:
     bool     *vpq_checkpoint_tail_phase;
 
     //-----------------------------
+    // Non-speculative commit BHR
+    // Updated only at retirement of branch instructions
+    //-----------------------------
+    uint64_t commit_bhr;
+    uint32_t bhr_length;    // how many branch history bits to use
+    uint64_t bhr_mask;      // (1 << bhr_length) - 1
+
+    // Called from retire.cc when a branch retires
+    void update_commit_bhr(bool taken);
+    uint32_t get_mediator_index(uint64_t pc);
+
+    //-----------------------------
     // Constructor / Destructor
     //-----------------------------
     vpu_t(uint32_t vpq_size,
@@ -130,7 +142,8 @@ public:
           uint32_t tag_bits,
           uint32_t conf_max,
           uint32_t conf_miss_pen,
-          bool     oracle_conf);
+          bool     oracle_conf,
+          uint32_t bhr_length);
     ~vpu_t();
 
     //-----------------------------
